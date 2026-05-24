@@ -50,15 +50,21 @@ Sonata uses a JavaScript config file (`config.js` by default). Copy `config.exam
 ```bash
 cp config.example.js config.js
 ```
-    "spotify": false
-  },
-  "lavalink": {
-    "version": 4
-  }
-}
-```
 
-Environment variables: `SONATA_HOST`, `SONATA_PORT`, `SONATA_PASSWORD`, `SONATA_LOG_LEVEL`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`.
+All options are documented in [`config.example.js`](config.example.js) with inline comments. Key sections:
+
+| Section | Purpose |
+|---------|---------|
+| `server` | Host, port, password, socket timeout |
+| `logging` | Level (debug/info/warn/error), format (text/json), file output |
+| `sources` | Enable/disable audio sources (youtube, soundcloud, spotify, http, local) |
+| `lavalink` | API version (3/4), session resume timeout |
+| `voice` | UDP mode, external address, port range |
+| `queue` | History size, default volume |
+| `metrics` | Prometheus exporter settings |
+| `rateLimiting` | Request throttling |
+| `plugins` | Plugin paths and configs |
+| `clustering` | Multi-node setup |
 
 ## API
 
@@ -109,7 +115,7 @@ npx tsx watch src/index.ts
 
 ```
 src/
-├── config/       # JSON config + env overrides
+├── config/       # config.js module loader
 ├── server/       # HTTP + WebSocket (Node built-in + ws)
 ├── lavalink/     # REST API v4/v3 + WS event system
 ├── player/       # Player, queue, voice connection
@@ -119,6 +125,7 @@ src/
 │   ├── soundcloud/ # SoundCloud API
 │   └── spotify/  # Spotify API + mirroring
 ├── audio/        # Mixer, filters (equalizer, timescale, etc.)
+├── native/       # C++ addon (OPUS encoder/decoder, mixer)
 ├── plugin/       # Plugin system
 ├── metrics/      # Prometheus metrics
 ├── middleware/   # Auth, logging, rate limiting
@@ -131,7 +138,7 @@ src/
 |--------|--------|------|
 | YouTube | InnerTube API (5 client profiles) | None |
 | SoundCloud | Public API + client ID | None |
-| Spotify | Web API + mirroring (YouTube) | `SPOTIFY_CLIENT_ID` + `SPOTIFY_CLIENT_SECRET` |
+| Spotify | Web API + mirroring (YouTube) | `clientId` + `clientSecret` in config.js |
 
 ## Plugin system
 
