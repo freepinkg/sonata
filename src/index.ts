@@ -121,7 +121,10 @@ api.register(srv, cfg.lavalink.apiVersion)
 
 // WebSocket - Lavalink v4 clients connect to root path
 srv.ws('/')
-srv.wss.on('connection', (ws) => wsHandler.handleConnection(ws))
+srv.wss.on('connection', (ws: any, req?: any) => {
+  const userId = req?.headers?.['user-id'] as string ?? ''
+  wsHandler.handleConnection(ws, undefined, userId)
+})
 
 // Dashboard
 if (cfg.server.dashboard) {

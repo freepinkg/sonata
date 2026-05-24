@@ -19,9 +19,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@performanc/voice": "github:PerformanC/voice",
+    "@snazzah/davey": "^0.1.11",
     "opusscript": "^0.1.1",
     "pino": "^9.0.0",
     "prom-client": "^15.0.0",
+    "tweetnacl": "^1.0.3",
     "ws": "^8.18.0",
     "zod": "^3.23.0"
   },

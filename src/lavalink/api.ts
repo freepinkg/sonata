@@ -5,6 +5,7 @@ import { Resolver } from '../resolving/index.js'
 import { Server } from '../server/index.js'
 import { VoiceConnection } from '../player/voice.js'
 import { TrackCache } from '../cache/index.js'
+import { encodeTrack } from '../player/encoder.js'
 import type { VoiceState } from '../types/index.js'
 
 export class LavalinkAPI {
@@ -85,7 +86,7 @@ export class LavalinkAPI {
 
     if (this.#cache) {
       const cached = this.#cache.get(identifier)
-      if (cached) return this.#json(res, 200, { loadType: cached.length === 1 ? 'track' : 'search', tracks: cached })
+      if (cached) return this.#json(res, 200, this.#formatLoadResult(cached.length === 1 ? 'track' : 'search', cached))
     }
 
     this.#resolver.resolveAsync(identifier).then(result => {
@@ -100,8 +101,40 @@ export class LavalinkAPI {
         }
       }
 
-      this.#json(res, 200, result)
+      this.#json(res, 200, this.#formatLoadResult(result.loadType, result.tracks, result.playlistInfo, result.exception))
+    }).catch(() => {
+      this.#json(res, 200, this.#formatLoadResult('error', []))
     })
+  }
+
+  #formatLoadResult(loadType: string, tracks: any[], playlistInfo?: any, exception?: any) {
+    const v3Map: Record<string, string> = {
+      track: 'TRACK_LOADED',
+      search: 'SEARCH_RESULT',
+      playlist: 'PLAYLIST_LOADED',
+      empty: 'NO_MATCHES',
+      error: 'LOAD_FAILED',
+    }
+    return {
+      loadType: v3Map[loadType] ?? 'NO_MATCHES',
+      tracks: tracks.map(this.#formatTrack),
+      playlistInfo,
+      exception,
+    }
+  }
+
+  #formatTrack(t: any) {
+    if (t?.info) {
+      t.info.length = t.info.duration
+      t.info.isSeekable = !t.info.isStream
+    }
+    // Generate proper lavalink-format base64 encoded track
+    const encoded = t?.info ? encodeTrack(t) : t?.encoded ?? ''
+    if (t) {
+      t.encoded = encoded
+      t.track = encoded
+    }
+    return t
   }
 
   #decodeTrack(req: IncomingMessage, res: ServerResponse) {

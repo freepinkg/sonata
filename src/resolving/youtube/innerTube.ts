@@ -12,40 +12,40 @@ interface ClientProfile {
 }
 
 const CLIENTS: Record<string, ClientProfile> = {
+  ANDROID_VR: {
+    name: 'ANDROID_VR',
+    key: '',
+    clientName: 'ANDROID_VR',
+    clientVersion: '1.65.10',
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/39.3.0.11.46.766180192 Chrome/136.0.7103.177 VR Safari/537.36,gzip(gfe);GoogleHypersonic',
+  },
   WEB: {
     name: 'WEB',
-    key: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+    key: '',
     clientName: 'WEB',
-    clientVersion: '2.20240301.00.00',
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  },
-  MUSIC: {
-    name: 'WEB_REMIX',
-    key: 'AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30',
-    clientName: 'WEB_REMIX',
-    clientVersion: '1.20240301.00.00',
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    clientVersion: '2.20250301.00.00',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36,gzip(gfe)',
   },
   ANDROID: {
     name: 'ANDROID',
-    key: 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
+    key: '',
     clientName: 'ANDROID',
-    clientVersion: '19.09.37',
-    userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 12) gzip',
+    clientVersion: '20.01.35',
+    userAgent: 'com.google.android.youtube/20.01.35 (Linux; U; Android 14) gzip',
   },
   IOS: {
     name: 'IOS',
-    key: 'AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc',
+    key: '',
     clientName: 'IOS',
-    clientVersion: '19.09.37',
-    userAgent: 'com.google.ios.youtube/19.09.37 (iPhone; iOS 17.0; Scale/2.00)',
+    clientVersion: '21.02.1',
+    userAgent: 'com.google.ios.youtube/21.02.1 (iPhone16,2; U; CPU iOS 18_2)',
   },
   TV: {
-    name: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
-    key: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
-    clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
-    clientVersion: '2.0',
-    userAgent: 'Mozilla/5.0 (ChromiumStylePlatform) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    name: 'TVHTML5',
+    key: '',
+    clientName: 'TVHTML5',
+    clientVersion: '7.20260113.16.00',
+    userAgent: 'Mozilla/5.0 (Fuchsia) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36,gzip(gfe)',
   },
 }
 
@@ -76,7 +76,7 @@ export class InnerTubeClient {
   constructor(clientProfiles?: string[], private proxy?: string) {
     this.#profiles = clientProfiles?.length
       ? clientProfiles.map(name => CLIENTS[name]).filter(Boolean)
-      : [CLIENTS.WEB, CLIENTS.MUSIC, CLIENTS.ANDROID, CLIENTS.IOS, CLIENTS.TV]
+      : [CLIENTS.ANDROID_VR, CLIENTS.ANDROID, CLIENTS.IOS, CLIENTS.WEB, CLIENTS.TV]
   }
 
   async search(query: string): Promise<InnerTubeSearchResult[]> {
@@ -107,7 +107,7 @@ export class InnerTubeClient {
   }
 
   async #searchWithClient(query: string, client: ClientProfile): Promise<InnerTubeSearchResult[]> {
-    const body = {
+    const body: Record<string, any> = {
       query,
       context: {
         client: {
@@ -117,9 +117,11 @@ export class InnerTubeClient {
           gl: 'US',
         },
       },
+      contentCheckOk: true,
+      racyCheckOk: true,
     }
 
-    const res = await fetch(`${BASE_URL}/search?key=${client.key}`, {
+    const res = await fetch(`${BASE_URL}/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'User-Agent': client.userAgent },
       body: JSON.stringify(body),
@@ -142,9 +144,11 @@ export class InnerTubeClient {
           gl: 'US',
         },
       },
+      contentCheckOk: true,
+      racyCheckOk: true,
     }
 
-    const res = await fetch(`${BASE_URL}/player?key=${client.key}`, {
+    const res = await fetch(`${BASE_URL}/player`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'User-Agent': client.userAgent },
       body: JSON.stringify(body),
@@ -169,7 +173,7 @@ export class InnerTubeClient {
       },
     }
 
-    const res = await fetch(`${BASE_URL}/browse?key=${client.key}`, {
+    const res = await fetch(`${BASE_URL}/browse`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'User-Agent': client.userAgent },
       body: JSON.stringify(body),
@@ -183,12 +187,13 @@ export class InnerTubeClient {
 
   #parseSearchResults(data: any): InnerTubeSearchResult[] {
     const results: InnerTubeSearchResult[] = []
-    try {
-      const contents = data?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents ?? []
+
+    const tryExtract = (contents: any[]) => {
+      if (!contents) return false
       for (const section of contents) {
         const items = section?.itemSectionRenderer?.contents ?? []
         for (const item of items) {
-          const video = item?.videoRenderer
+          const video = item?.videoRenderer || item?.compactVideoRenderer
           if (!video) continue
           const videoId = video?.videoId
           if (!videoId) continue
@@ -197,11 +202,21 @@ export class InnerTubeClient {
           results.push({
             videoId,
             title: this.#getText(video?.title),
-            author: this.#getText(video?.ownerText ?? video?.longBylineText),
+            author: this.#getText(video?.ownerText ?? video?.longBylineText ?? video?.shortBylineText),
             duration: this.#parseDuration(len),
             thumbnail: video?.thumbnail?.thumbnails?.[video.thumbnail.thumbnails.length - 1]?.url ?? '',
           })
         }
+      }
+      return results.length > 0
+    }
+
+    try {
+      if (tryExtract(data?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents)) return results
+      const sections = data?.contents?.sectionListRenderer?.contents
+      if (sections) {
+        const last = sections[sections.length - 1]
+        if (tryExtract([last])) return results
       }
     } catch { /* parse errors are non-fatal */ }
     return results

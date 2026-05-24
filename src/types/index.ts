@@ -12,11 +12,13 @@ export interface TrackInfo {
   title: string
   author: string
   duration: number
+  length?: number
   uri: string
   artworkUrl: string
   sourceName: string
   isStream: boolean
   position: number
+  isSeekable?: boolean
 }
 
 export interface PlayerState {

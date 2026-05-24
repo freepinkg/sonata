@@ -1,183 +1,151 @@
-import { createSocket, Socket } from 'node:dgram'
 import OpusScript from 'opusscript'
-import { randomBytes, createCipheriv } from 'node:crypto'
+import voiceLib from '@performanc/voice'
 
-const VOICE_VERSION = 0x80 | 0x70
-const FRAME_SIZE = 960
-const CHANNELS = 2
-const SAMPLE_RATE = 48000
-const HEADER_LEN = 12
+const { joinVoiceChannel } = voiceLib
 
-function xor(a: Buffer, b: Buffer): Buffer {
-  const out = Buffer.alloc(a.length)
-  for (let i = 0; i < a.length; i++) out[i] = a[i] ^ b[i]
-  return out
-}
+const OPUS_FRAME_SIZE = 960
+const PCM_FRAME_SIZE = OPUS_FRAME_SIZE * 2 * 2
 
-export interface VoiceOptions {
-  endpoint: string
-  port: number
-  ssrc: number
-  token: string
+export interface VoiceConnectOptions {
   guildId: string
+  userId: string
+  sessionId: string
+  token: string
+  endpoint: string
+  channelId: string
 }
 
 export class DiscordVoice extends EventTarget {
-  #socket: Socket | null = null
-  endpoint = ''
-  port = 0
-  ssrc = 0
-  connected = false
-  #speaking = false
-  #sequence = 0
-  #timestamp = 0
-  #encoder: OpusScript
-  #secretKey: Buffer = Buffer.alloc(0)
-  #modes: string[] = []
-  #keepaliveInterval: ReturnType<typeof setInterval> | null = null
-  #reconnectAttempts = 0
-  #maxReconnectAttempts = 5
-  #lastRTT = 0
-  #pingStart = 0
-  #onPingCallback: ((rtt: number) => void) | null = null
+  #connection: any = null
+  #opts: VoiceConnectOptions | null = null
+  #readyEmitted = false
+  #encoder: any = null
+  #hasSpoken = false
 
-  constructor() {
-    super()
-    this.#encoder = new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO)
+  connected = false
+  ping = 0
+
+  get ssrc() { return this.#connection?.udpInfo?.ssrc ?? 0 }
+  get speaking() { return this.#connection?.playerState?.status === 'playing' }
+
+  connect(opts: VoiceConnectOptions) {
+    this.#opts = opts
+    this.#createConnection()
   }
 
-  get speaking() { return this.#speaking }
+  #createConnection() {
+    const opts = this.#opts!
+    console.log(`[Voice] Creating connection: guild=${opts.guildId} userId=${opts.userId} channelId=${opts.channelId}`)
 
-  connect(opts: VoiceOptions) {
-    this.endpoint = opts.endpoint
-    this.port = opts.port
-    this.ssrc = opts.ssrc
-    this.#sequence = 0
-    this.#timestamp = 0
-    this.#reconnectAttempts = 0
-    this.#socket = createSocket('udp4')
-    this.#socket.on('error', (err) => this.dispatchEvent(new CustomEvent('error', { detail: err })))
-    this.#socket.on('message', (msg) => this.#handleMessage(msg))
-    this.#socket.send(this.#ipDiscovery(), this.port, this.endpoint)
-    this.#pingStart = Date.now()
-    this.#keepaliveInterval = setInterval(() => {
-      if (this.#socket) this.#socket.send(this.#ipDiscovery(), this.port, this.endpoint)
-    }, 30000)
+    this.#connection = joinVoiceChannel({
+      guildId: opts.guildId,
+      userId: opts.userId,
+      channelId: opts.channelId,
+      encryption: 'aead_aes256_gcm_rtpsize',
+    })
+
+    console.log(`[Voice] Connection object created, initial state=${this.#connection.state?.status}`)
+
+    this.#connection.on('stateChange', (_oldState: any, newState: any) => {
+      const status = newState.status
+      const reason = newState.reason
+      const code = newState.code
+      const closeReason = newState.closeReason
+      console.log(`[Voice] stateChange: ${_oldState?.status} -> ${status} (reason=${reason}, code=${code}, closeReason=${closeReason})`)
+      if (status === 'connected') {
+        this.connected = true
+        this.ping = this.#connection.ping ?? 0
+        if (!this.#readyEmitted) {
+          this.#readyEmitted = true
+          this.dispatchEvent(new CustomEvent('ready'))
+        }
+      } else if (status === 'disconnected' || status === 'destroyed') {
+        this.connected = false
+        this.#readyEmitted = false
+      }
+    })
+
+    this.#connection.on('playerStateChange', (_oldState: any, newState: any) => {
+      if (newState.status === 'idle' && _oldState.status === 'playing') {
+        this.dispatchEvent(new CustomEvent('end'))
+      } else if (newState.status === 'playing' && _oldState.status !== 'playing') {
+        this.dispatchEvent(new CustomEvent('start'))
+      }
+    })
+
+    this.#connection.on('error', (err: any) => {
+      console.log(`[Voice] Error: ${err?.message ?? err}`)
+    })
+  }
+
+  feedVoiceUpdate(sessionId: string, token: string, endpoint: string) {
+    if (!this.#connection) return
+
+    const cleanEndpoint = endpoint.replace(/^wss:\/\//, '').replace(/\/\?v=\d+$/, '')
+    console.log(`[Voice] feedVoiceUpdate: endpoint=${cleanEndpoint} sessionId=${sessionId}`)
+
+    this.#connection.voiceStateUpdate({ session_id: sessionId })
+    this.#connection.voiceServerUpdate({ token, endpoint: cleanEndpoint })
+    console.log(`[Voice] calling connect()...`)
+    this.#connection.connect()
+    console.log(`[Voice] connect() returned, state=${this.#connection.state?.status}`)
+  }
+
+  sendPCM(pcm: Buffer): number {
+    const c = this.#connection
+    if (!c || !this.connected) return 0
+    if (!this.#encoder) {
+      this.#encoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO)
+      console.log(`[Voice] Opus encoder created`)
+    }
+    if (pcm.length < PCM_FRAME_SIZE) {
+      console.log(`[Voice] sendPCM: short frame ${pcm.length} < ${PCM_FRAME_SIZE}`)
+      return 0
+    }
+    try {
+      const opus = this.#encoder.encode(pcm, OPUS_FRAME_SIZE)
+      if (opus?.length > 0) {
+        if (!this.#hasSpoken) {
+          this.#hasSpoken = true
+          console.log(`[Voice] first audio chunk, setting speaking`)
+          try { c._setSpeaking(1 << 0) } catch (e) { console.log(`[Voice] _setSpeaking error: ${e}`) }
+        }
+        c.sendAudioChunk(opus)
+      } else {
+        console.log(`[Voice] opus encode returned empty`)
+        return 0
+      }
+    } catch (e) {
+      console.log(`[Voice] sendPCM error: ${e}`)
+      return 0
+    }
+    return 1
+  }
+
+  stopSpeaking() {
+    if (this.#connection) {
+      this.#connection.stop()
+      this.#connection._setSpeaking(0)
+    }
+    this.#hasSpoken = false
+  }
+
+  destroy() {
+    this.stopSpeaking()
+    if (this.#encoder) {
+      this.#encoder.delete()
+      this.#encoder = null
+    }
+    if (this.#connection) {
+      this.#connection.destroy()
+      this.#connection.removeAllListeners()
+      this.#connection = null
+    }
+    this.connected = false
+    this.#readyEmitted = false
   }
 
   close() {
-    if (this.#keepaliveInterval) { clearInterval(this.#keepaliveInterval); this.#keepaliveInterval = null }
-    this.#socket?.close()
-    this.#socket = null
-    this.connected = false
-    this.#speaking = false
-    this.#sequence = 0
-    this.#timestamp = 0
-    this.#reconnectAttempts = 0
-  }
-
-  setSecretKey(key: Buffer) { this.#secretKey = key }
-  setModes(modes: string[]) { this.#modes = modes }
-
-  sendAudio(pcm: Buffer): number {
-    if (!this.connected || !this.#socket || this.#secretKey.length === 0) return 0
-    if (!this.#speaking) { this.#speaking = true; this.#sendSpeaking(1) }
-
-    const frames = Math.floor(pcm.length / (FRAME_SIZE * CHANNELS * 2))
-    let sent = 0
-    for (let f = 0; f < frames; f++) {
-      const offset = f * FRAME_SIZE * CHANNELS * 2
-      const frame = pcm.subarray(offset, offset + FRAME_SIZE * CHANNELS * 2)
-      const opus = Buffer.from(this.#encoder.encode(frame, FRAME_SIZE))
-      if (opus.length > 0) { this.#sendPacket(opus); sent++ }
-    }
-    return sent
-  }
-
-  stop() { if (this.#speaking) { this.#sendSpeaking(0); this.#speaking = false } }
-
-  get ping(): number { return this.#lastRTT }
-
-  set onPing(cb: ((rtt: number) => void) | null) { this.#onPingCallback = cb }
-
-  reconnect() {
-    this.close()
-    this.#reconnectAttempts++
-    if (this.#reconnectAttempts > this.#maxReconnectAttempts) {
-      this.dispatchEvent(new CustomEvent('error', { detail: new Error('Max reconnect attempts reached') }))
-      return
-    }
-    this.connect({ endpoint: this.endpoint, port: this.port, ssrc: this.ssrc, token: '', guildId: '' })
-  }
-
-  sendSilence() {
-    const silence = Buffer.alloc(FRAME_SIZE * CHANNELS * 2)
-    const opus = Buffer.from(this.#encoder.encode(silence, FRAME_SIZE))
-    if (opus.length > 0) this.#sendPacket(opus)
-  }
-
-  #handleMessage(msg: Buffer) {
-    if (msg.length === 74) {
-      const ip = msg.slice(8, 72).toString().replace(/\0/g, '')
-      const ourPort = msg.readUInt16BE(72)
-      this.dispatchEvent(new CustomEvent('ipDiscovery', { detail: { ip, port: ourPort, ssrc: this.ssrc } }))
-      this.connected = true
-      this.#selectProtocol(ip, ourPort)
-      this.#lastRTT = Date.now() - this.#pingStart
-      this.#onPingCallback?.(this.#lastRTT)
-    } else if (msg.length === 70) {
-      this.connected = msg.readUInt32BE(4) === 1
-      if (this.connected) this.dispatchEvent(new CustomEvent('ready'))
-    }
-  }
-
-  #ipDiscovery(): Buffer {
-    const p = Buffer.alloc(74)
-    p.writeUInt16BE(0x1, 0); p.writeUInt16BE(70, 2); p.writeUInt32BE(this.ssrc, 4)
-    return p
-  }
-
-  #selectProtocol(ip: string, port: number) {
-    const p = Buffer.alloc(76)
-    p.writeUInt16BE(0x1, 0); p.writeUInt16BE(70, 2); p.writeUInt32BE(this.ssrc, 4)
-    Buffer.from(ip).copy(p, 8, 0, Math.min(ip.length, 64))
-    p.writeUInt16BE(port, 72)
-    this.#socket?.send(p, this.port, this.endpoint)
-  }
-
-  #sendSpeaking(state: number) {
-    const p = Buffer.alloc(17)
-    p.writeUInt16BE(0x1, 0); p.writeUInt16BE(16, 2); p.writeUInt32BE(this.ssrc, 4)
-    p.writeUInt32BE(state, 8); p.writeUInt32BE(0, 12)
-    this.#socket?.send(p, this.port, this.endpoint)
-  }
-
-  #sendPacket(opus: Buffer) {
-    const suffix = randomBytes(12)
-    const nonce = Buffer.concat([Buffer.alloc(HEADER_LEN), suffix])
-
-    const header = Buffer.alloc(HEADER_LEN)
-    header[0] = VOICE_VERSION; header[1] = 0x00
-    header.writeUInt16BE(this.#sequence & 0xFFFF, 2)
-    header.writeUInt32BE(this.#timestamp, 4)
-    header.writeUInt32BE(this.ssrc, 8)
-    nonce.fill(0, 0, HEADER_LEN)
-    header.copy(nonce, 0, 0, HEADER_LEN)
-
-    const encrypted = this.#encrypt(opus, nonce)
-    const p = Buffer.alloc(HEADER_LEN + encrypted.length + 12)
-    header.copy(p, 0)
-    encrypted.copy(p, HEADER_LEN)
-    suffix.copy(p, HEADER_LEN + encrypted.length)
-    this.#socket?.send(p, this.port, this.endpoint)
-    this.#sequence++
-    this.#timestamp += FRAME_SIZE
-  }
-
-  #encrypt(plaintext: Buffer, nonce: Buffer): Buffer {
-    const key = this.#secretKey
-    const xorNonce = nonce.subarray(0, 16)
-    const enc = createCipheriv('aes-256-ctr', key.subarray(0, 32), xorNonce)
-    return Buffer.concat([enc.update(plaintext), enc.final()])
+    this.destroy()
   }
 }
