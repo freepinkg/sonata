@@ -6,7 +6,7 @@
       "cflags_cc!": ["-fno-exceptions"],
       "cflags_cc": ["-std=c++20", "-Wall", "-O3"],
       "include_dirs": [
-        "/root/sonata/node_modules/node-addon-api",
+        "node_modules/node-addon-api",
         "/usr/include/opus"
       ],
       "libraries": ["-lopus", "-lsodium"],
