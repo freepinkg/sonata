@@ -5,7 +5,7 @@ import { VoiceConnection } from '../player/voice.js'
 import { Player } from '../player/player.js'
 import type { Track, PlayerState } from '../types/index.js'
 
-interface WSClient { ws: WebSocket; sessionId: string; resumed: boolean }
+interface WSClient { ws: WebSocket; sessionId: string; resumed: boolean; userId?: string }
 
 export class LavalinkWS {
   pm: PlayerManager
@@ -36,7 +36,7 @@ export class LavalinkWS {
 
     this.#send(ws, 'ready', {
       resumed,
-      session: { id: sessionId, resume: true },
+      sessionId,
     })
 
     ws.on('message', (data) => {
@@ -70,6 +70,11 @@ export class LavalinkWS {
 
   #handleMessage(client: WSClient, msg: any) {
     if (msg.op === 'ping') return this.#send(client.ws, 'pong', {})
+    if (msg.op === 'configure') {
+      // lavaclient sends configure with userId - store it for reference
+      client.userId = msg.userId
+      return
+    }
     if (msg.op !== 'voiceUpdate') return
 
     const { guildId, sessionId, event } = msg
@@ -96,7 +101,7 @@ export class LavalinkWS {
 
   #send(ws: WebSocket, op: string, data: any) {
     if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ op, data }))
+      ws.send(JSON.stringify({ op, ...data }))
     }
   }
 

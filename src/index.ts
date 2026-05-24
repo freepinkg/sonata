@@ -119,8 +119,8 @@ if (cfg.security?.rateLimit) {
 const api = new LavalinkAPI(pm, resolver, sessions, cache)
 api.register(srv, cfg.lavalink.apiVersion)
 
-// WebSocket
-srv.ws('/ws')
+// WebSocket - Lavalink v4 clients connect to root path
+srv.ws('/')
 srv.wss.on('connection', (ws) => wsHandler.handleConnection(ws))
 
 // Dashboard

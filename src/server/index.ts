@@ -56,6 +56,12 @@ export class Server {
     this.#server.on('upgrade', (req, socket, head) => {
       const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
       if (url.pathname === this.#wsUpgradePath) {
+        const auth = req.headers['authorization']
+        if (this.#password && auth !== this.#password) {
+          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+          socket.destroy()
+          return
+        }
         this.#wss.handleUpgrade(req, socket, head, (ws) => this.#wss.emit('connection', ws, req))
       } else socket.destroy()
     })
