@@ -9,7 +9,7 @@
         "node_modules/node-addon-api",
         "/usr/include/opus"
       ],
-      "libraries": ["-lopus", "-lsodium"],
+      "libraries": ["-lopus"],
       "sources": [
         "src/native/opus.cc",
         "src/native/mixer.cc"
