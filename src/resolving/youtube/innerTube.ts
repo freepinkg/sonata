@@ -1,3 +1,8 @@
+import type { YouTubeFormat as YTFormat } from './cipher.js'
+import { extractStreamUrl, selectBestAudioFormat } from './cipher.js'
+
+type YouTubeFormat = YTFormat
+
 interface ClientProfile {
   name: string
   key: string
@@ -52,7 +57,9 @@ interface InnerTubeVideo {
   author: string
   duration: number
   thumbnail: string
-  formats?: any[]
+  formats?: YouTubeFormat[]
+  streamUrl?: string | null
+  expiresInSeconds?: string
 }
 
 interface InnerTubeSearchResult {
@@ -196,13 +203,23 @@ export class InnerTubeClient {
 
   #parseVideoResponse(data: any, videoId: string): InnerTubeVideo {
     const details = data?.videoDetails ?? {}
+    const formats: YouTubeFormat[] = [
+      ...(data?.streamingData?.formats ?? []),
+      ...(data?.streamingData?.adaptiveFormats ?? []),
+    ]
+
+    const best = selectBestAudioFormat(formats)
+    const streamUrl = best ? extractStreamUrl(best) : null
+
     return {
       videoId,
       title: details?.title ?? 'Unknown',
       author: details?.author ?? 'Unknown',
       duration: Number(details?.lengthSeconds ?? 0) * 1000,
       thumbnail: details?.thumbnail?.thumbnails?.[details.thumbnail.thumbnails.length - 1]?.url ?? '',
-      formats: data?.streamingData?.formats ?? data?.streamingData?.adaptiveFormats ?? [],
+      formats,
+      streamUrl,
+      expiresInSeconds: data?.streamingData?.expiresInSeconds,
     }
   }
 

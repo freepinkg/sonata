@@ -33,6 +33,10 @@ export class LavalinkAPI {
     srv.handle('DELETE', `${p}/sessions/{id}/players/{guildId}`, (req, res, params) => this.#destroyPlayer(res, params))
     srv.handle('POST', `${p}/sessions/{id}/players/{guildId}/voice`, (req, res, params, body) => this.#updateVoice(res, params, body))
     srv.handle('GET', '/v4/stats', (req, res) => this.#stats(res))
+    srv.handle('GET', '/v4/routeplanner/status', (req, res) => this.#routePlannerStatus(res))
+    srv.handle('POST', '/v4/routeplanner/free/address', (req, res, params, body) => this.#routePlannerFreeAddress(res, body))
+    srv.handle('POST', '/v4/routeplanner/free/all', (req, res) => this.#routePlannerFreeAll(res))
+    srv.handle('POST', '/v4/decodetracks', (req, res, params, body) => this.#decodeTracks(res, body))
   }
 
   #loadTracks(req: IncomingMessage, res: ServerResponse) {
@@ -122,6 +126,51 @@ export class LavalinkAPI {
       memory: { free: mem.heapTotal - mem.heapUsed, used: mem.heapUsed, allocated: mem.heapTotal, reservable: mem.rss },
       cpu: { cores: 0, systemLoad: 0, processLoad: 0 },
     })
+  }
+
+  #routePlannerStatus(res: ServerResponse) {
+    this.#json(res, 200, {
+      ip: null,
+      failingAddresses: [],
+      blockIndex: null,
+      currentAddressIndex: null,
+      details: { ipBlock: { type: 'Inet6', size: '64' } },
+    })
+  }
+
+  #routePlannerFreeAddress(res: ServerResponse, body: any) {
+    res.statusCode = 204
+    res.end()
+  }
+
+  #routePlannerFreeAll(res: ServerResponse) {
+    res.statusCode = 204
+    res.end()
+  }
+
+  #decodeTracks(res: ServerResponse, body: any) {
+    if (!body?.tracks) return this.#json(res, 400, { error: 'Missing tracks' })
+    const decoded = body.tracks.map((e: string) => {
+      try {
+        const data = JSON.parse(Buffer.from(e, 'base64').toString())
+        return {
+          encoded: e,
+          info: {
+            identifier: data.i ?? '',
+            title: data.t ?? 'Unknown',
+            author: data.a ?? 'Unknown',
+            duration: data.d ?? 0,
+            uri: data.u ?? '',
+            artworkUrl: '',
+            sourceName: data.s ?? 'unknown',
+            isStream: false,
+            position: 0,
+          },
+          source: data.s ?? 'unknown',
+        }
+      } catch { return null }
+    }).filter(Boolean)
+    this.#json(res, 200, decoded)
   }
 
   #json(res: ServerResponse, status: number, data: unknown) {

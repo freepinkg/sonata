@@ -63,7 +63,7 @@ export class YouTubeSource implements AudioSource {
         title: video.title ?? 'Unknown',
         author: video.author ?? 'Unknown',
         duration: video.duration ?? 0,
-        uri: `https://youtube.com/watch?v=${video.videoId}`,
+        uri: video.streamUrl ?? `https://youtube.com/watch?v=${video.videoId}`,
         artworkUrl: video.thumbnail ?? '',
         sourceName: 'youtube',
         isStream: (video.duration ?? 0) <= 0,
