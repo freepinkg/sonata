@@ -26,6 +26,12 @@ export class LavalinkAPI {
     const p = version === 4 ? '/v4' : '/v3'
     srv.handle('GET', '/loadtracks', (req, res) => this.#loadTracks(req, res))
     srv.handle('GET', '/decodetrack', (req, res) => this.#decodeTrack(req, res))
+    srv.handle('GET', '/v4/loadtracks', (req, res) => this.#loadTracks(req, res))
+    srv.handle('GET', '/v4/decodetrack', (req, res) => this.#decodeTrack(req, res))
+    srv.handle('POST', '/v4/decodetrack', (req, res, params, body) => this.#decodeTrackFromBody(res, body))
+    srv.handle('GET', '/v3/loadtracks', (req, res) => this.#loadTracks(req, res))
+    srv.handle('GET', '/v3/decodetrack', (req, res) => this.#decodeTrack(req, res))
+    srv.handle('POST', '/v3/decodetrack', (req, res, params, body) => this.#decodeTrackFromBody(res, body))
     srv.handle('POST', `${p}/sessions`, (req, res, params, body) => this.#createSession(res, body))
     srv.handle('GET', `${p}/sessions/{id}`, (req, res, params) => this.#getSession(res, params))
     srv.handle('PATCH', `${p}/sessions/{id}`, (req, res, params, body) => this.#updateSession(res, params, body))
@@ -61,6 +67,7 @@ export class LavalinkAPI {
 
     // New v4 endpoints
     srv.handle('GET', '/v4/version', (req, res) => this.#version(res))
+    srv.handle('GET', '/v4/info', (req, res) => this.#version(res))
     srv.handle('GET', '/v4/sessions', (req, res) => this.#listSessions(res))
 
     // queue management endpoints
@@ -102,6 +109,14 @@ export class LavalinkAPI {
     const encoded = url.searchParams.get('track')
     if (!encoded) return this.#json(res, 400, { error: 'Missing track' })
     this.#resolver.resolveTrackAsync(encoded).then(track => {
+      if (!track) return this.#json(res, 404, { error: 'Track not found' })
+      this.#json(res, 200, track)
+    })
+  }
+
+  #decodeTrackFromBody(res: ServerResponse, body: any) {
+    if (!body?.track) return this.#json(res, 400, { error: 'Missing track in body' })
+    this.#resolver.resolveTrackAsync(body.track).then(track => {
       if (!track) return this.#json(res, 404, { error: 'Track not found' })
       this.#json(res, 200, track)
     })

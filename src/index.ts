@@ -73,6 +73,14 @@ const srv = new Server({
   password: cfg.server.password,
 })
 
+// Public paths (no auth required)
+const publicPaths = [
+  cfg.server.healthPath ?? '/health',
+  cfg.server.versionPath ?? '/version',
+  cfg.server.dashboard ?? '/dashboard',
+]
+for (const p of publicPaths) srv.noAuth(p)
+
 // CORS
 if (cfg.server.cors) {
   srv.onPreHandle(corsHandler)
@@ -150,7 +158,7 @@ srv.handle('GET', '/health', (req, res) => {
     playing: pm.playingCount(),
     sessions: sessions.count(),
     cache: cache?.size ?? 0,
-    version: '0.1.0',
+    version: VERSION,
     memory: process.memoryUsage().rss,
   }))
 })
@@ -160,7 +168,7 @@ if (cfg.server.versionPath) {
   srv.handle('GET', cfg.server.versionPath, (req, res) => {
     res.end(JSON.stringify({
       name: 'sonata',
-      version: '0.1.0',
+      version: VERSION,
       lavalink: cfg.lavalink.apiVersion,
       node: process.version,
       platform: process.platform,

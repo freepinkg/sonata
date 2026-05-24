@@ -21,6 +21,7 @@ export class Server {
   #started = Date.now()
   #requestCount = 0
   #password: string
+  #noAuthPaths: Set<string> = new Set()
   #preHandlers: ((req: IncomingMessage, res: ServerResponse) => boolean | Promise<boolean>)[] = []
 
   constructor(opts: { level?: string; format?: string; password?: string }) {
@@ -30,6 +31,8 @@ export class Server {
     })
     this.#password = opts.password ?? ''
   }
+
+  noAuth(path: string) { this.#noAuthPaths.add(path) }
 
   get logger() { return this.#logger }
   get wss() { return this.#wss }
@@ -70,7 +73,9 @@ export class Server {
     this.#requestCount++
     const start = Date.now()
     res.setHeader('Content-Type', 'application/json')
-    res.setHeader('Server', 'Sonata/0.1.0')
+    res.setHeader('Server', 'Sonata/4.0.0')
+
+    const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
 
     // Pre-handlers (CORS, IP filter, etc)
     for (const fn of this.#preHandlers) {
@@ -78,12 +83,11 @@ export class Server {
       if (handled) return
     }
 
-    if (this.#password) {
+    if (this.#password && !this.#noAuthPaths.has(url.pathname)) {
       const auth = req.headers['authorization']
       if (auth !== this.#password) return this.#json(res, 401, { error: 'Unauthorized' })
     }
 
-    const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
     const method = req.method?.toUpperCase() ?? 'GET'
 
     for (const route of this.#routes) {

@@ -36,7 +36,7 @@ h1{color:#e94560;font-size:1.8rem;margin-bottom:.5rem}
 </div>
 <div class="bar"><div class="bar-fill" style="width:${s.players ? Math.min(100, s.players * 10) : 0}%"></div></div>
 <div class="sources">${s.sources.map(src => `<span>${src}</span>`).join('')}</div>
-<div class="footer">Memory: ${s.memory} &middot; Sonata v0.1.0</div>
+<div class="footer">Memory: ${s.memory} &middot; Sonata v4.0.0</div>
 </div></body></html>`
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
     res.end(html)
