@@ -6,21 +6,24 @@ const API_BASE = 'https://www.jiosaavn.com/api.php'
 
 interface JioSaavnSong {
   id: string
-  title: string
-  subtitle?: string
-  perma_url: string
-  image: string
+  song?: string
+  title?: string
+  album?: string
+  image?: string
+  perma_url?: string
+  duration?: string
+  primary_artists?: string
+  singers?: string
+  albumid?: string
+  language?: string
+  music?: string
   more_info?: {
     duration?: string
     music?: string
-    album?: string
-    artistMap?: {
-      primary_artists?: { name: string; id: string }[]
-    }
+    primary_artists?: string
+    singers?: string
+    artistMap?: { primary_artists?: { name: string; id: string }[] }
   }
-  album?: string
-  year?: string
-  language?: string
 }
 
 interface JioSaavnAlbum {
@@ -38,26 +41,36 @@ interface JioSaavnPlaylist {
   title: string
   perma_url: string
   image: string
-  more_info?: { artistMap?: { artists?: { name: string }[] } }
   songs?: JioSaavnSong[]
-  list?: string
 }
 
-interface JioSaavnAutocomplete {
-  songs?: { results?: JioSaavnSong[] }
-  albums?: { results?: JioSaavnAlbum[] }
-  playlists?: { results?: JioSaavnPlaylist[] }
+interface JioSaavnSearchResult {
+  total: number
+  start: number
+  results: JioSaavnSong[]
 }
 
-async function apiCall(params: Record<string, string>): Promise<any> {
-  const qs = new URLSearchParams({ __call: '', _format: 'json', _marker: '0', ...params })
+async function apiCall(params: Record<string, string>): Promise<any | null> {
+  const qs = new URLSearchParams({ __call: '', _format: 'json', _marker: '0', cc: 'us', ...params })
   const res = await fetch(`${API_BASE}?${qs}`, {
-    headers: { 'User-Agent': 'Mozilla/5.0' },
+    headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
   })
   if (!res.ok) return null
   const text = await res.text()
   if (!text || text === 'null') return null
   try { return JSON.parse(text) } catch { return null }
+}
+
+function extractToken(url: string): { type: string; token: string } | null {
+  try {
+    const parts = new URL(url).pathname.split('/').filter(Boolean)
+    if (parts.length < 2) return null
+    const type = parts[0]
+    const token = parts[parts.length - 1].split('?')[0].split('#')[0]
+    return { type, token }
+  } catch {
+    return null
+  }
 }
 
 export class JioSaavnSource implements AudioSource {
@@ -69,29 +82,24 @@ export class JioSaavnSource implements AudioSource {
 
   async resolve(query: string): Promise<Track[]> {
     if (!this.matches(query)) return this.#search(query)
+    return this.#resolveUrl(query)
+  }
+
+  async #resolveUrl(url: string): Promise<Track[]> {
+    const info = extractToken(url)
+    if (!info) return []
+
     try {
-      const parts = new URL(query).pathname.split('/').filter(Boolean)
-      if (parts.length < 2) return []
-      const type = parts[0]
-      const id = parts[parts.length - 1].split('?')[0].split('#')[0]
+      const res = await apiCall({ __call: 'webapi.get', token: info.token, type: info.type, p: '1', n: '50', includeMetaTags: '0' })
+      if (!res) return []
 
-      if (type === 'song') {
-        const res = await apiCall({ __call: 'song.getDetails', pids: id })
-        if (!res) return []
-        const song: JioSaavnSong = res[id] || res
-        return song?.id ? [this.#make(song)] : []
+      if (info.type === 'song') {
+        const song: JioSaavnSong = Object.values(res)[0] as any
+        if (!song?.id) return []
+        return [this.#make(song)]
       }
 
-      if (type === 'album') {
-        const res = await apiCall({ __call: 'album.getDetails', albumid: id })
-        if (!res) return []
-        const songs: JioSaavnSong[] = res.songs ?? res.list ?? []
-        return songs.slice(0, 50).map((t) => this.#make(t))
-      }
-
-      if (type === 'playlist') {
-        const res = await apiCall({ __call: 'playlist.getDetails', listid: id })
-        if (!res) return []
+      if (info.type === 'album' || info.type === 'playlist') {
         const songs: JioSaavnSong[] = res.songs ?? res.list ?? []
         return songs.slice(0, 50).map((t) => this.#make(t))
       }
@@ -116,31 +124,34 @@ export class JioSaavnSource implements AudioSource {
 
   async #search(q: string): Promise<Track[]> {
     try {
-      const res = await apiCall({ __call: 'autocomplete.get', query: q })
+      const res = await apiCall({ __call: 'search.getResults', q, p: '1', n: '10' })
       if (!res) return []
-      const data = res as JioSaavnAutocomplete
-      const songs = data.songs?.results ?? []
-      return songs.slice(0, 10).map((t) => this.#make(t))
+      const data = res as JioSaavnSearchResult
+      return (data.results ?? []).slice(0, 10).map((t) => this.#make(t))
     } catch {
       return []
     }
   }
 
   #make(t: JioSaavnSong): Track {
-    const duration = t.more_info?.duration ? parseFloat(t.more_info.duration) * 1000 : 0
-    const author = t.more_info?.music
-      ?? t.more_info?.artistMap?.primary_artists?.[0]?.name
-      ?? t.subtitle
+    const duration = parseFloat(t.duration ?? t.more_info?.duration ?? '0') * 1000
+    const title = t.song ?? t.title ?? 'Unknown'
+    const author = t.primary_artists
+      ?? t.more_info?.primary_artists
+      ?? t.singers
+      ?? t.more_info?.music
+      ?? t.music
       ?? 'Unknown'
+
     return {
       encoded: Buffer.from(t.id).toString('base64url'),
       info: {
         identifier: t.id,
-        title: t.title ?? 'Unknown',
+        title,
         author,
-        duration,
+        duration: isNaN(duration) ? 0 : duration,
         uri: t.perma_url ?? '',
-        artworkUrl: t.image?.replace('-150x150', '-500x500') ?? '',
+        artworkUrl: (t.image ?? '').replace('-150x150', '-500x500'),
         sourceName: 'jiosaavn',
         isStream: false,
         position: 0,
