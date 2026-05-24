@@ -9,7 +9,8 @@
     "sonata": "bin/sonata.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "npm run build:native && tsc",
+    "build:native": "node-gyp rebuild",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "dev:watch": "tsx watch src/index.ts",
@@ -18,6 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "node-addon-api": "^8.8.0",
     "pino": "^9.0.0",
     "prom-client": "^15.0.0",
     "ws": "^8.18.0",
