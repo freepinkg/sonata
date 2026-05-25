@@ -18,12 +18,7 @@ function decryptMediaUrl(encrypted: string, key: string): string | null {
       const idx = url.indexOf(ext)
       if (idx !== -1) url = url.slice(0, idx + ext.length)
     }
-    url = url.replace(/^http:/, 'https:')
-    // Try to convert AAC URL to MP3 (decoder only supports MP3/FLAC)
-    if (url.includes('aac.saavncdn.com') && url.endsWith('.mp4')) {
-      url = url.replace('aac.saavncdn.com', 'mp3.saavncdn.com').replace(/_\d+\.mp4$/, '_320.mp3')
-    }
-    return url
+    return url.replace(/^http:/, 'https:')
   } catch {
     return null
   }

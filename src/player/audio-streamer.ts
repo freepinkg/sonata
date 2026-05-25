@@ -86,6 +86,7 @@ export class AudioStreamer extends EventTarget {
   #streamEnded = false
   #nextStreamEnded = false
   #pcmSource = false
+  #opusBuffer: Buffer[] = []
 
   #proxyAgent: SocksProxyAgent | null = null
 
@@ -242,10 +243,10 @@ export class AudioStreamer extends EventTarget {
       this.#pcmSource = true
       await this.#startMp3Stream(uri)
     } else {
+      this.#opusBuffer = []
       this.#demuxer = new WebmOpusDemuxer()
       this.#demuxer.on('data', (opusPacket: Buffer) => {
-        if (this.#paused) return
-        this.#voice.sendOpus(opusPacket)
+        this.#opusBuffer.push(opusPacket)
       })
       this.#demuxer.on('end', () => {
         this.#logger?.debug('streamer', `demuxer stream ended`)
@@ -260,12 +261,15 @@ export class AudioStreamer extends EventTarget {
     this.#sendInterval = setInterval(() => {
       if (this.#paused || !this.#playing) return
       if (this.#prebuffering) {
-        // Pre-buffer handled by connection's internal queue
-        // Just wait for the stream to buffer enough
-        this.#prebuffering = false
+        if (this.#pcmSource) {
+          this.#prebuffering = false
+        } else if (this.#streamEnded) {
+          this.#prebuffering = false
+          this.#logger?.debug('streamer', `pre-buffer done, ${this.#opusBuffer.length} opus frames (stream ended)`)
+        }
         return
       }
-      if (this.#pcmBuffer.length === 0 && this.#streamEnded) {
+      if (this.#pcmBuffer.length === 0 && this.#streamEnded && this.#opusBuffer.length === 0) {
         if (this.#isCrossfading) {
           this.#finishCrossfade()
         } else if (this.#pcmSource) {
@@ -279,6 +283,8 @@ export class AudioStreamer extends EventTarget {
         this.#sendCrossfadeFrame()
       } else if (this.#pcmBuffer.length > 0) {
         this.#sendNextFrame()
+      } else if (this.#opusBuffer.length > 0) {
+        this.#voice.sendOpus(this.#opusBuffer.shift()!)
       }
     }, FRAME_DURATION)
 
@@ -640,6 +646,7 @@ export class AudioStreamer extends EventTarget {
     this.#cleanupHttp(true)
     this.#pcmBuffer = []
     this.#nextPcmBuffer = []
+    this.#opusBuffer = []
     this.#voice.stopSpeaking()
   }
 

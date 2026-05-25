@@ -19,10 +19,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ecliptia/faad2-wasm": "^2.11.2-ecliptia.1",
     "@performanc/voice": "^2.2.5",
     "@projectdysnomia/dysnomia": "^0.2.4",
     "@snazzah/davey": "^0.1.11",
-    "@sonata-sdk/decoder": "^0.1.0",
+    "@sonata-sdk/decoder": "^0.3.1",
     "@sonata-sdk/voice": "^1.0.9",
     "opusscript": "^0.1.1",
     "pino": "^9.0.0",
