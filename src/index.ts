@@ -254,5 +254,5 @@ if (process.env['NODE_ENV'] !== 'test') {
 // Start
 srv.listen(cfg.server.port, cfg.server.host, () => {
   showBanner(cfg)
-  logStartup(cfg, logger)
+  logStartup(cfg, pluginManager.all.length, logger)
 })
