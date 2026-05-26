@@ -27,10 +27,12 @@ export class LavalinkWS {
   #youtubeConfig: any
 
   #proxy: { socks?: string } | null = null
+  #config: { queue?: any; player?: any; voice?: any; ws?: any; proxy?: { socks?: string }; youtube?: any } | null = null
 
-  constructor(pm: PlayerManager, sessions: SessionManager, cfg?: { queue?: { crossfade?: number; crossfadeFadeIn?: number; crossfadeFadeOut?: number }; player?: { normalization?: boolean; normalizationTarget?: number; filters?: any }; proxy?: { socks?: string }; youtube?: any }, logger?: Logger) {
+  constructor(pm: PlayerManager, sessions: SessionManager, cfg?: { queue?: { crossfade?: number; crossfadeFadeIn?: number; crossfadeFadeOut?: number }; player?: { normalization?: boolean; normalizationTarget?: number; filters?: any; ducking?: any; gapless?: any; fade?: any; autoVolume?: any; introOutro?: any; snapshot?: any }; voice?: any; ws?: any; proxy?: { socks?: string }; youtube?: any }, logger?: Logger) {
     this.pm = pm
     this.sessions = sessions
+    this.#config = cfg ?? null
     if (cfg?.queue?.crossfade && cfg.queue.crossfade > 0) {
       this.#crossfade = {
         duration: cfg.queue.crossfade,
@@ -130,6 +132,7 @@ export class LavalinkWS {
 
         const dv = new DiscordVoice()
         if (this.#logger) dv.setLogger(this.#logger)
+        if (this.#config?.voice) dv.setVoiceConfig(this.#config.voice)
         const userId = client.userId ?? ''
         const channelId = msg.channelId ?? guildId
         dv.connect({ guildId, userId, sessionId, token: event.token, endpoint: event.endpoint, channelId })
@@ -142,6 +145,16 @@ export class LavalinkWS {
         if (this.#crossfade) streamer.setCrossfade(this.#crossfade)
         if (this.#normalizationEnabled) streamer.setNormalization(true, this.#normalizationTarget)
         if (this.#defaultFilters) streamer.setPlayerFilters(this.#defaultFilters)
+        const pCfg = this.#config?.player
+        if (pCfg?.gapless?.enabled) streamer.setGapless(pCfg.gapless)
+        if (pCfg?.fade?.enabled) streamer.setFade(pCfg.fade)
+        if (pCfg?.introOutro?.enabled) streamer.setIntroOutro(pCfg.introOutro)
+        if (pCfg?.ducking?.enabled && streamer.mixer) {
+          streamer.mixer.setFilters({ ducking: pCfg.ducking })
+        }
+        if (pCfg?.autoVolume?.enabled && streamer.mixer) {
+          streamer.mixer.setFilters({ autoVolume: pCfg.autoVolume })
+        }
         streamer.addEventListener('start', ((e: CustomEvent) => {
           this.#broadcast(client, 'event', {
             type: 'TrackStartEvent',
@@ -351,13 +364,23 @@ export class LavalinkWS {
     }
   }
 
+  #shouldAllowEvent(op: string, data: any): boolean {
+    const wsCfg = this.#config?.ws
+    if (!wsCfg?.eventFiltering) return true
+    if (!wsCfg.allowedEvents?.length) return true
+    if (op === 'event') return wsCfg.allowedEvents.includes(data?.type)
+    return wsCfg.allowedEvents.includes(op)
+  }
+
   #broadcast(client: WSClient, op: string, data: any) {
+    if (!this.#shouldAllowEvent(op, data)) return
     if (client.ws.connected) {
       client.ws.send(JSON.stringify({ op, ...data }))
     }
   }
 
   #broadcastAll(op: string, data: any) {
+    if (!this.#shouldAllowEvent(op, data)) return
     for (const c of this.#clients.values()) {
       if (c.ws.connected) {
         c.ws.send(JSON.stringify({ op, ...data }))

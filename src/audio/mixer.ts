@@ -13,6 +13,8 @@ export interface FilterConfig {
   reverb?: { delay?: number; decay?: number; mix?: number }
   limiter?: { threshold?: number; attack?: number; release?: number; ratio?: number }
   normalization?: { enabled: boolean; target?: number }
+  ducking?: { enabled: boolean; threshold?: number; reduceBy?: number; attackMs?: number; releaseMs?: number; minVolume?: number }
+  autoVolume?: { enabled: boolean; targetLUFS?: number; maxGain?: number; minGain?: number; attackMs?: number; releaseMs?: number }
 }
 
 export interface ProcessedFilters {
@@ -30,6 +32,8 @@ export interface ProcessedFilters {
   reverb: Required<NonNullable<FilterConfig['reverb']>>
   limiter: Required<NonNullable<FilterConfig['limiter']>>
   normalization: { enabled: boolean; target: number; gain: number }
+  ducking: { enabled: boolean; threshold: number; reduceBy: number; attackMs: number; releaseMs: number; minVolume: number; gain: number; active: boolean }
+  autoVolume: { enabled: boolean; targetLUFS: number; maxGain: number; minGain: number; attackMs: number; releaseMs: number; gain: number; integratedLUFS: number; sumSq: number; totalSamples: number }
 }
 
 const DEFAULTS: ProcessedFilters = {
@@ -47,6 +51,8 @@ const DEFAULTS: ProcessedFilters = {
   reverb: { delay: 0.05, decay: 0.3, mix: 0 },
   limiter: { threshold: 1, attack: 0.002, release: 0.1, ratio: 20 },
   normalization: { enabled: false, target: -14, gain: 1.0 },
+  ducking: { enabled: false, threshold: 0.02, reduceBy: 0.5, attackMs: 100, releaseMs: 500, minVolume: 0.05, gain: 1.0, active: false },
+  autoVolume: { enabled: false, targetLUFS: -14, maxGain: 6, minGain: -6, attackMs: 2000, releaseMs: 5000, gain: 1.0, integratedLUFS: 0, sumSq: 0, totalSamples: 0 },
 }
 
 export class AudioMixer {
@@ -78,6 +84,26 @@ export class AudioMixer {
       this.#filters.normalization.enabled = opts.normalization.enabled ?? false
       if (opts.normalization.target !== undefined) this.#filters.normalization.target = opts.normalization.target
     }
+    if (opts.ducking !== undefined) {
+      this.#filters.ducking.enabled = opts.ducking.enabled ?? false
+      if (opts.ducking.threshold !== undefined) this.#filters.ducking.threshold = opts.ducking.threshold
+      if (opts.ducking.reduceBy !== undefined) this.#filters.ducking.reduceBy = opts.ducking.reduceBy
+      if (opts.ducking.attackMs !== undefined) this.#filters.ducking.attackMs = opts.ducking.attackMs
+      if (opts.ducking.releaseMs !== undefined) this.#filters.ducking.releaseMs = opts.ducking.releaseMs
+      if (opts.ducking.minVolume !== undefined) this.#filters.ducking.minVolume = opts.ducking.minVolume
+    }
+    if (opts.autoVolume !== undefined) {
+      this.#filters.autoVolume.enabled = opts.autoVolume.enabled ?? false
+      if (opts.autoVolume.targetLUFS !== undefined) this.#filters.autoVolume.targetLUFS = opts.autoVolume.targetLUFS
+      if (opts.autoVolume.maxGain !== undefined) this.#filters.autoVolume.maxGain = opts.autoVolume.maxGain
+      if (opts.autoVolume.minGain !== undefined) this.#filters.autoVolume.minGain = opts.autoVolume.minGain
+      if (opts.autoVolume.attackMs !== undefined) this.#filters.autoVolume.attackMs = opts.autoVolume.attackMs
+      if (opts.autoVolume.releaseMs !== undefined) this.#filters.autoVolume.releaseMs = opts.autoVolume.releaseMs
+    }
+  }
+
+  setVoiceActivity(active: boolean) {
+    this.#filters.ducking.active = active
   }
 
   getFilters(): FilterConfig {
@@ -96,6 +122,8 @@ export class AudioMixer {
       reverb: { ...this.#filters.reverb },
       limiter: { ...this.#filters.limiter },
       normalization: { ...this.#filters.normalization },
+      ducking: { enabled: this.#filters.ducking.enabled, threshold: this.#filters.ducking.threshold, reduceBy: this.#filters.ducking.reduceBy, attackMs: this.#filters.ducking.attackMs, releaseMs: this.#filters.ducking.releaseMs, minVolume: this.#filters.ducking.minVolume },
+      autoVolume: { enabled: this.#filters.autoVolume.enabled, targetLUFS: this.#filters.autoVolume.targetLUFS, maxGain: this.#filters.autoVolume.maxGain, minGain: this.#filters.autoVolume.minGain, attackMs: this.#filters.autoVolume.attackMs, releaseMs: this.#filters.autoVolume.releaseMs },
     }
   }
 
@@ -133,6 +161,54 @@ export class AudioMixer {
       if (Math.abs(f.normalization.gain - 1) > 0.01) {
         for (let i = 0; i < len; i++) {
           let s = samples[i] * f.normalization.gain
+          if (s > 32767) s = 32767
+          if (s < -32768) s = -32768
+          samples[i] = s | 0
+        }
+      }
+    }
+
+    // Ducking (voice activity gain reduction)
+    if (f.ducking.enabled) {
+      const targetGain = f.ducking.active ? Math.max(f.ducking.minVolume, 1 - f.ducking.reduceBy) : 1
+      const duckSamples = f.ducking.active
+        ? Math.max(1, (f.ducking.attackMs / 1000) * sampleRate)
+        : Math.max(1, (f.ducking.releaseMs / 1000) * sampleRate)
+      const step = (targetGain - f.ducking.gain) / duckSamples
+      for (let i = 0; i < len; i++) {
+        f.ducking.gain += step
+        if (f.ducking.active && f.ducking.gain < targetGain) f.ducking.gain = targetGain
+        if (!f.ducking.active && f.ducking.gain > targetGain) f.ducking.gain = targetGain
+        let s = samples[i] * f.ducking.gain
+        if (s > 32767) s = 32767
+        if (s < -32768) s = -32768
+        samples[i] = s | 0
+      }
+    }
+
+    // AutoVolume (EBU R128-style LUFS normalization)
+    if (f.autoVolume.enabled) {
+      for (let i = 0; i < len; i++) {
+        f.autoVolume.sumSq += samples[i] * samples[i]
+      }
+      f.autoVolume.totalSamples += len
+      if (f.autoVolume.totalSamples >= sampleRate) {
+        const rms = Math.sqrt(f.autoVolume.sumSq / f.autoVolume.totalSamples)
+        const lufs = rms > 0 ? -23.0 + 20 * Math.log10(rms / 32768) : -90
+        f.autoVolume.integratedLUFS += (lufs - f.autoVolume.integratedLUFS) * 0.3
+        const targetGainDb = f.autoVolume.targetLUFS - f.autoVolume.integratedLUFS
+        const clampedDb = Math.max(f.autoVolume.minGain, Math.min(f.autoVolume.maxGain, targetGainDb))
+        const targetLinear = Math.pow(10, clampedDb / 20)
+        const attackLen = Math.max(1, (f.autoVolume.attackMs / 1000) * sampleRate)
+        const releaseLen = Math.max(1, (f.autoVolume.releaseMs / 1000) * sampleRate)
+        const stepSize = targetLinear > f.autoVolume.gain ? 1 / attackLen : 1 / releaseLen
+        f.autoVolume.gain += (targetLinear - f.autoVolume.gain) * stepSize * len
+        f.autoVolume.sumSq = 0
+        f.autoVolume.totalSamples = 0
+      }
+      if (Math.abs(f.autoVolume.gain - 1) > 0.01) {
+        for (let i = 0; i < len; i++) {
+          let s = samples[i] * f.autoVolume.gain
           if (s > 32767) s = 32767
           if (s < -32768) s = -32768
           samples[i] = s | 0

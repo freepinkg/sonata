@@ -78,6 +78,20 @@ export class AudioStreamer extends EventTarget {
   #mixer: AudioMixer | null = null
   #logger: Logger | null = null
 
+  #gaplessCfg: { enabled: boolean; maxGapMs: number; preferAccurate: boolean } | null = null
+  #fadeCfg: { enabled: boolean; fadeInMs: number; fadeOutMs: number; onPlay: boolean; onPause: boolean; onResume: boolean; onSkip: boolean } | null = null
+  #fadeGain = 1.0
+  #fadeTarget = 1.0
+  #fadeStart = 0
+  #skipFading = false
+  #pausePendingFade = false
+
+  #introOutroCfg: { enabled: boolean; introFile?: string; outroFile?: string; mixIntro?: boolean; mixOutro?: boolean } | null = null
+  #introPcm: Buffer | null = null
+  #outroPcm: Buffer | null = null
+  #introPlayed = false
+  #outroOffset = 0
+
   #opusDecoder: InstanceType<typeof OpusScript> | null = null
   #httpReq: http.ClientRequest | null = null
   #demuxer: WebmOpusDemuxer | null = null
@@ -127,6 +141,49 @@ export class AudioStreamer extends EventTarget {
   }
 
   setCrossfade(cfg: CrossfadeConfig | null) { this.#crossfade = cfg }
+
+  setGapless(cfg: { enabled: boolean; maxGapMs: number; preferAccurate: boolean } | null) { this.#gaplessCfg = cfg }
+  setFade(cfg: { enabled: boolean; fadeInMs: number; fadeOutMs: number; onPlay: boolean; onPause: boolean; onResume: boolean; onSkip: boolean } | null) { this.#fadeCfg = cfg }
+  setIntroOutro(cfg: { enabled: boolean; introFile?: string; outroFile?: string; mixIntro?: boolean; mixOutro?: boolean } | null) {
+    this.#introOutroCfg = cfg
+    if (cfg?.enabled) {
+      this.#loadIntroOutro(cfg)
+    }
+  }
+
+  async #loadIntroOutro(cfg: { introFile?: string; outroFile?: string; mixIntro?: boolean; mixOutro?: boolean }) {
+    const { readFile } = await import('node:fs/promises')
+    if (cfg.introFile) {
+      try {
+        const raw = await readFile(cfg.introFile)
+        const pcm = await this.#decodeToPcm(raw)
+        if (pcm) this.#introPcm = pcm
+      } catch { this.#introPcm = null }
+    }
+    if (cfg.outroFile) {
+      try {
+        const raw = await readFile(cfg.outroFile)
+        const pcm = await this.#decodeToPcm(raw)
+        if (pcm) this.#outroPcm = pcm
+      } catch { this.#outroPcm = null }
+    }
+  }
+
+  async #decodeToPcm(data: Buffer): Promise<Buffer | null> {
+    try {
+      const mod = await import('@sonata-sdk/decoder')
+      const { detectFormat, createDecoder } = mod
+      const arr = new Uint8Array(data)
+      const fmt = detectFormat(arr)
+      if (!fmt) return null
+      const decoder = await createDecoder(fmt)
+      const { channelData, samplesDecoded } = await decoder.decode(arr)
+      decoder.free()
+      return float32ToInt16(channelData, samplesDecoded)
+    } catch {
+      return null
+    }
+  }
 
   setNextTrack(track: Track) {
     this.#nextTrack = track
@@ -205,6 +262,15 @@ export class AudioStreamer extends EventTarget {
     this.#position = 0
     this.#paused = false
 
+    if (this.#fadeCfg?.enabled && this.#fadeCfg.onPlay) {
+      this.#fadeGain = 0
+      this.#fadeTarget = 1
+      this.#fadeStart = Date.now()
+    } else {
+      this.#fadeGain = 1
+      this.#fadeTarget = 1
+    }
+
     if (!this.#voice.connected) {
       this.#logger?.debug('streamer', `play: voice not connected, waiting for ready event`)
       return
@@ -230,6 +296,12 @@ export class AudioStreamer extends EventTarget {
     this.#streamEnded = false
     this.#pcmBuffer = []
     this.#pcmSource = false
+    this.#introPlayed = false
+
+    if (this.#introPcm && this.#introOutroCfg?.enabled) {
+      this.#pcmBuffer.push(this.#introPcm)
+      this.#introPlayed = true
+    }
 
     this.dispatchEvent(new CustomEvent('start', { detail: { track: this.#currentTrack } }))
 
@@ -259,7 +331,18 @@ export class AudioStreamer extends EventTarget {
     this.#logger?.debug('streamer', 'starting sendInterval')
     this.#prebuffering = true
     this.#sendInterval = setInterval(() => {
-      if (this.#paused || !this.#playing) return
+      if (this.#skipFading && this.#fadeGain <= 0.01) {
+        this.#hardStop()
+        return
+      }
+      if (this.#pausePendingFade && this.#fadeGain <= 0.01) {
+        this.#pausePendingFade = false
+        this.#paused = true
+        this.#voice.stopSpeaking()
+        this.dispatchEvent(new CustomEvent('pause'))
+        return
+      }
+      if (!this.#pausePendingFade && (this.#paused || !this.#playing)) return
       if (this.#prebuffering) {
         if (this.#pcmSource) {
           this.#prebuffering = false
@@ -275,6 +358,18 @@ export class AudioStreamer extends EventTarget {
         } else if (this.#pcmSource) {
           this.#voice.finishBuffering()
         } else {
+          // Gapless: if next track ready, transition without stopping
+          if (this.#gaplessCfg?.enabled && this.#nextTrack) {
+            this.#performGaplessTransition()
+            return
+          }
+          // Append outro PCM if available
+          if (this.#outroPcm) {
+            this.#pcmBuffer.push(this.#outroPcm)
+            this.#streamEnded = false
+            this.#outroPcm = null
+            return
+          }
           this.#onEnd('finished')
         }
         return
@@ -284,7 +379,8 @@ export class AudioStreamer extends EventTarget {
       } else if (this.#pcmBuffer.length > 0) {
         this.#sendNextFrame()
       } else if (this.#opusBuffer.length > 0) {
-        this.#voice.sendOpus(this.#opusBuffer.shift()!)
+        const opus = this.#opusBuffer.shift()!
+        this.#voice.sendOpus(opus)
       }
     }, FRAME_DURATION)
 
@@ -543,6 +639,35 @@ export class AudioStreamer extends EventTarget {
     } catch {}
   }
 
+  #performGaplessTransition() {
+    if (!this.#nextTrack) return
+    this.#logger?.debug('streamer', `gapless transition to "${this.#nextTrack.info.title}"`)
+    this.#cleanupHttp(false)
+    const oldTrack = this.#currentTrack
+    if (this.#nextDemuxer || this.#nextPcmBuffer.length > 0) {
+      this.#currentTrack = this.#nextTrack
+      this.#nextTrack = null
+      this.#seekPosition = 0
+      this.#startTime = Date.now()
+      this.#demuxer = this.#nextDemuxer
+      this.#nextDemuxer = null
+      this.#httpReq = this.#nextHttpReq
+      this.#nextHttpReq = null
+      this.#streamEnded = this.#nextStreamEnded
+      this.#nextStreamEnded = false
+      this.#pcmBuffer = [...this.#nextPcmBuffer]
+      this.#nextPcmBuffer = []
+      if (oldTrack) {
+        this.dispatchEvent(new CustomEvent('start', { detail: { track: this.#currentTrack } }))
+      }
+    } else {
+      const track = this.#nextTrack
+      this.#nextTrack = null
+      this.#onEnd('finished')
+      // player will advance to next track via onTrackEnd callback
+    }
+  }
+
   #finishCrossfade() {
     this.#isCrossfading = false
     this.#nextPcmBuffer = []
@@ -590,6 +715,25 @@ export class AudioStreamer extends EventTarget {
     }
 
     if (frame.length >= FRAME_SIZE) {
+      // Apply fade envelope
+      const fc = this.#fadeCfg
+      if (fc?.enabled && this.#fadeGain !== this.#fadeTarget) {
+        const elapsed = Date.now() - this.#fadeStart
+        const dur = this.#fadeTarget === 0 ? fc.fadeOutMs : fc.fadeInMs
+        const progress = dur > 0 ? Math.min(1, elapsed / dur) : 1
+        this.#fadeGain = this.#fadeTarget === 0 ? (1 - progress) : progress
+        if (progress >= 1) this.#fadeGain = this.#fadeTarget
+        const sampleCount = frame.length / 2
+        for (let i = 0; i < sampleCount; i++) {
+          const idx = i * 2
+          const s = frame.readInt16LE(idx)
+          frame.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(s * this.#fadeGain))), idx)
+        }
+        if (this.#fadeTarget === 0 && this.#fadeGain <= 0.01) {
+          // pause fade or skip fade handled in send loop
+        }
+      }
+
       if (this.#mixer) {
         const pcm = new Int16Array(frame.buffer, frame.byteOffset, frame.byteLength / 2)
         const processed = this.#mixer.apply(pcm, SAMPLE_RATE)
@@ -603,6 +747,13 @@ export class AudioStreamer extends EventTarget {
   }
 
   pause() {
+    if (this.#fadeCfg?.enabled && this.#fadeCfg.onPause && this.#fadeGain > 0.01) {
+      this.#fadeTarget = 0
+      this.#fadeStart = Date.now()
+      this.#pausePendingFade = true
+      this.#seekPosition = this.position
+      return
+    }
     this.#paused = true
     this.#seekPosition = this.position
     this.#voice.stopSpeaking()
@@ -613,6 +764,11 @@ export class AudioStreamer extends EventTarget {
     if (!this.#paused) return
     this.#paused = false
     this.#startTime = Date.now()
+    if (this.#fadeCfg?.enabled && this.#fadeCfg.onResume) {
+      this.#fadeGain = 0
+      this.#fadeTarget = 1
+      this.#fadeStart = Date.now()
+    }
     this.dispatchEvent(new CustomEvent('resume'))
   }
 
@@ -644,6 +800,8 @@ export class AudioStreamer extends EventTarget {
     if (f.highPass) mf.highPass = f.highPass
     if (f.reverb) mf.reverb = f.reverb
     if (f.limiter) mf.limiter = f.limiter
+    if ((f as any).ducking) mf.ducking = (f as any).ducking
+    if ((f as any).autoVolume) mf.autoVolume = (f as any).autoVolume
     this.#mixer.setFilters(mf)
   }
 
@@ -652,6 +810,18 @@ export class AudioStreamer extends EventTarget {
   }
 
   stop() {
+    if (this.#playing && this.#fadeCfg?.enabled && this.#fadeCfg.onSkip && this.#fadeGain > 0.01) {
+      this.#fadeTarget = 0
+      this.#fadeStart = Date.now()
+      this.#skipFading = true
+      this.#paused = false
+      return
+    }
+    this.#hardStop()
+  }
+
+  #hardStop() {
+    this.#skipFading = false
     this.#playing = false
     this.#paused = false
     this.#seekPosition = 0

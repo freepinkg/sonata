@@ -1,6 +1,8 @@
 import { Player, PlayerEventHandlers, State } from './player.js'
 import { TrackCache } from '../cache/index.js'
 import type { QueueFilterConfig } from './queue.js'
+import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 
 const IDLE_TIMEOUT = 300_000
 
@@ -14,12 +16,76 @@ export class PlayerManager {
   #stickyQueueEnabled = false
   #stickyQueueFileTemplate = ''
   #queueFilters: QueueFilterConfig = {}
+  #queueCfg: any = {}
 
-  constructor(handler: PlayerEventHandlers, stickyQueue = false, stickyQueueFile = '', queueFilters: QueueFilterConfig = {}) {
+  #snapshotCfg: { enabled: boolean; dir: string; autoSave: boolean; saveIntervalMs: number; maxSnapshots: number } | null = null
+  #snapshotSaveInterval: ReturnType<typeof setInterval> | null = null
+
+  constructor(handler: PlayerEventHandlers, stickyQueue = false, stickyQueueFile = '', queueFilters: QueueFilterConfig = {}, queueCfg: any = {}) {
     this.#handler = handler
     this.#stickyQueueEnabled = stickyQueue
     this.#stickyQueueFileTemplate = stickyQueueFile
     this.#queueFilters = queueFilters
+    this.#queueCfg = queueCfg
+  }
+
+  setSnapshotConfig(cfg: { enabled: boolean; dir: string; autoSave: boolean; saveIntervalMs: number; maxSnapshots: number }) {
+    this.#snapshotCfg = cfg
+    if (!cfg.enabled) return
+    if (!existsSync(cfg.dir)) mkdirSync(cfg.dir, { recursive: true })
+    if (cfg.autoSave && cfg.saveIntervalMs > 0) {
+      if (this.#snapshotSaveInterval) clearInterval(this.#snapshotSaveInterval)
+      this.#snapshotSaveInterval = setInterval(() => {
+        for (const p of this.#players.values()) {
+          if (p.state !== State.Stopped) this.#saveSnapshot(p)
+        }
+      }, cfg.saveIntervalMs)
+    }
+  }
+
+  async saveSnapshot(guildId: string) {
+    const p = this.#players.get(guildId)
+    if (!p || !this.#snapshotCfg?.enabled) return
+    this.#saveSnapshot(p)
+  }
+
+  async restoreSnapshot(guildId: string): Promise<boolean> {
+    if (!this.#snapshotCfg?.enabled) return false
+    const dir = this.#snapshotCfg.dir
+    const file = join(dir, `${guildId}.json`)
+    if (!existsSync(file)) return false
+    try {
+      const raw = readFileSync(file, 'utf-8')
+      const data = JSON.parse(raw)
+      const p = this.getOrCreate(guildId)
+      p.fromSnapshot(data)
+      return true
+    } catch { return false }
+  }
+
+  #saveSnapshot(p: Player) {
+    if (!this.#snapshotCfg?.enabled) return
+    const dir = this.#snapshotCfg.dir
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    const snap = p.toSnapshot()
+    const file = join(dir, `${p.guildId}.json`)
+    writeFileSync(file, JSON.stringify(snap, null, 2), 'utf-8')
+    this.#rotateSnapshots(dir)
+  }
+
+  #rotateSnapshots(dir: string) {
+    const max = this.#snapshotCfg?.maxSnapshots ?? 10
+    try {
+      const files = readdirSync(dir)
+        .filter(f => f.endsWith('.json'))
+        .map(f => ({ name: f, mtime: statSync(join(dir, f)).mtimeMs }))
+        .sort((a, b) => a.mtime - b.mtime)
+      if (files.length <= max) return
+      const toDelete = files.slice(0, files.length - max)
+      for (const f of toDelete) {
+        try { unlinkSync(join(dir, f.name)) } catch {}
+      }
+    } catch {}
   }
 
   setAutoLeave(ms: number, onLeave: (guildId: string) => void) {
@@ -49,7 +115,15 @@ export class PlayerManager {
       const stickyFile = this.#stickyQueueEnabled
         ? (this.#stickyQueueFileTemplate || `data/queue-${guildId}.json`).replace('{guildId}', guildId)
         : ''
-      p = new Player(guildId, this.#handler, stickyFile)
+      p = new Player(guildId, this.#handler, stickyFile, {
+        defaultVolume: this.#queueCfg?.defaultVolume,
+        shuffle: this.#queueCfg?.shuffle,
+        maxHistorySize: this.#queueCfg?.maxHistorySize,
+        emptyRepeatMode: this.#queueCfg?.emptyRepeatMode,
+        perSourceLimits: this.#queueCfg?.perSourceLimits,
+        djMode: this.#queueCfg?.djMode,
+        collaborative: this.#queueCfg?.collaborative,
+      })
       p.queue.setFilters(this.#queueFilters)
       this.#players.set(guildId, p)
       this.#resetIdle(guildId)

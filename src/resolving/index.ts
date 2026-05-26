@@ -24,17 +24,27 @@ interface ResolverConfig {
 export class Resolver {
   #sourceManager = new AudioSourceManager()
   #mirror: MirrorResolver
+  #resolvingCfg: any = {}
+  #logger: Logger | null = null
 
   constructor() {
     this.#mirror = new MirrorResolver(this.#sourceManager)
   }
 
   setLogger(logger: Logger) {
+    this.#logger = logger
     this.#sourceManager.setLogger(logger)
   }
 
-  async init(config: ResolverConfig) {
+  async init(config: ResolverConfig, resolvingCfg?: any) {
+    this.#resolvingCfg = resolvingCfg ?? {}
     await this.#registerSources(config)
+  }
+
+  resolveSourceName(name: string): string {
+    const aliases = this.#resolvingCfg?.searchAliases
+    if (aliases && aliases[name]) return aliases[name]
+    return name
   }
 
   get sourceManager() { return this.#sourceManager }

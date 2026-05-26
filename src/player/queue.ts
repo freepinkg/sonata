@@ -12,6 +12,21 @@ export interface QueueFilterConfig {
   blockedSources?: string[]
 }
 
+export interface QueueDJConfig {
+  enabled: boolean
+  roles?: string[]
+  users?: string[]
+  allowSelfPlay?: boolean
+  bypassOnEmpty?: boolean
+}
+
+export interface QueueCollaborativeConfig {
+  enabled: boolean
+  maxTracksPerUser?: number
+  minVotesToSkip?: number
+  voteSkipEnabled?: boolean
+}
+
 export type QueueEventType = 'add' | 'remove' | 'clear' | 'shuffle'
 
 export interface QueueEventPayload {
@@ -28,10 +43,23 @@ export class Queue extends EventTarget {
   #stickyFile = ''
   #stickyDirtyTimer: ReturnType<typeof setTimeout> | null = null
   #filters: QueueFilterConfig = {}
+  #maxHistorySize = 0
+  #emptyRepeatMode: 'none' | 'track' | 'queue' = 'none'
+  #perSourceLimits: Record<string, number> = {}
+  #userTrackCount = new Map<string, Set<string>>()
+  #trackUser = new Map<string, string>()
+  #votes = new Map<string, Set<string>>()
+  #djCfg: QueueDJConfig = { enabled: false }
+  #collabCfg: QueueCollaborativeConfig = { enabled: false }
 
-  constructor(stickyFile = '', filters: QueueFilterConfig = {}) {
+  constructor(stickyFile = '', filters: QueueFilterConfig = {}, opts?: { maxHistorySize?: number; emptyRepeatMode?: 'none' | 'track' | 'queue'; perSourceLimits?: Record<string, number>; djMode?: QueueDJConfig; collaborative?: QueueCollaborativeConfig }) {
     super()
     this.#filters = filters
+    this.#maxHistorySize = opts?.maxHistorySize ?? 0
+    this.#emptyRepeatMode = opts?.emptyRepeatMode ?? 'none'
+    this.#perSourceLimits = opts?.perSourceLimits ?? {}
+    if (opts?.djMode) this.#djCfg = opts.djMode
+    if (opts?.collaborative) this.#collabCfg = opts.collaborative
     if (stickyFile) {
       this.#stickyFile = stickyFile
       this.#restore()
@@ -40,12 +68,20 @@ export class Queue extends EventTarget {
 
   setFilters(f: QueueFilterConfig) { this.#filters = f }
 
-  canAdd(track: Track): string | null {
+  canAdd(track: Track, userId?: string): string | null {
+    if (this.#collabCfg.enabled && this.#collabCfg.maxTracksPerUser && userId) {
+      const count = this.#userTrackCount.get(userId)?.size ?? 0
+      if (count >= this.#collabCfg.maxTracksPerUser) return `User max tracks (${this.#collabCfg.maxTracksPerUser}) reached`
+    }
     const f = this.#filters
     if (f.deduplicate && this.#tracks.some(t => t.encoded === track.encoded)) return 'Track already in queue'
     if (f.maxPerSource) {
       const fromSource = this.#tracks.filter(t => t.source === track.source).length
       if (fromSource >= f.maxPerSource) return `Max ${f.maxPerSource} tracks from ${track.source}`
+    }
+    if (this.#perSourceLimits[track.source]) {
+      const fromSource = this.#tracks.filter(t => t.source === track.source).length
+      if (fromSource >= this.#perSourceLimits[track.source]) return `Max ${this.#perSourceLimits[track.source]} tracks from ${track.source}`
     }
     if (f.maxPerArtist) {
       const fromArtist = this.#tracks.filter(t => t.info.author === track.info.author).length
@@ -90,10 +126,15 @@ export class Queue extends EventTarget {
     }, 100)
   }
 
-  enqueue(track: Track): string | null {
-    const rejection = this.canAdd(track)
+  enqueue(track: Track, userId?: string): string | null {
+    const rejection = this.canAdd(track, userId)
     if (rejection) return rejection
     this.#tracks.push(track)
+    if (userId && this.#collabCfg.enabled) {
+      this.#trackUser.set(track.encoded, userId)
+      if (!this.#userTrackCount.has(userId)) this.#userTrackCount.set(userId, new Set())
+      this.#userTrackCount.get(userId)!.add(track.encoded)
+    }
     this.#emit('add', { track, index: this.#tracks.length - 1 })
     this.#save()
     return null
@@ -101,7 +142,14 @@ export class Queue extends EventTarget {
 
   dequeue(): Track | null {
     const track = this.#tracks.shift() ?? null
-    if (track) this.#emit('remove', { track, index: 0 })
+    if (track) {
+      if (this.#collabCfg.enabled && this.#trackUser.has(track.encoded)) {
+        const userId = this.#trackUser.get(track.encoded)!
+        this.#userTrackCount.get(userId)?.delete(track.encoded)
+        this.#trackUser.delete(track.encoded)
+      }
+      this.#emit('remove', { track, index: 0 })
+    }
     this.#save()
     return track
   }
@@ -209,8 +257,41 @@ export class Queue extends EventTarget {
     return this.#tracks.reduce((sum, t) => sum + t.info.duration, 0)
   }
 
+  checkDJ(userId: string, userRoles: string[]): boolean {
+    if (!this.#djCfg.enabled) return true
+    if (this.#djCfg.bypassOnEmpty && this.#tracks.length === 0 && !this.#current) return true
+    if (this.#djCfg.users?.includes(userId)) return true
+    if (this.#djCfg.roles?.length && userRoles.some(r => this.#djCfg.roles!.includes(r))) return true
+    return false
+  }
+
+  voteSkip(userId: string, track: Track): boolean {
+    if (!this.#collabCfg.voteSkipEnabled) return false
+    const key = track.encoded
+    if (!this.#votes.has(key)) this.#votes.set(key, new Set())
+    this.#votes.get(key)!.add(userId)
+    const threshold = this.#collabCfg.minVotesToSkip ?? 3
+    return this.#votes.get(key)!.size >= threshold
+  }
+
+  getNextTrack(): Track | null {
+    if (this.#tracks.length > 0) return this.dequeue()
+    if (this.#emptyRepeatMode === 'track' && this.#current) return this.#current
+    if (this.#emptyRepeatMode === 'queue' && this.#history.length > 0) {
+      this.#tracks = [...this.#history]
+      this.#history = []
+      return this.#tracks.shift() ?? null
+    }
+    return null
+  }
+
   setCurrent(track: Track | null) {
-    if (this.#current) this.#history.push(this.#current)
+    if (this.#current) {
+      this.#history.push(this.#current)
+      if (this.#maxHistorySize > 0 && this.#history.length > this.#maxHistorySize) {
+        this.#history.splice(0, this.#history.length - this.#maxHistorySize)
+      }
+    }
     this.#current = track
   }
 
@@ -222,4 +303,18 @@ export class Queue extends EventTarget {
   get all(): Track[] { return [...this.#tracks] }
   get history(): Track[] { return [...this.#history] }
   get length() { return this.#tracks.length }
+
+  toJSON() {
+    return {
+      current: this.#current,
+      queue: this.#tracks,
+      history: this.#history,
+    }
+  }
+
+  fromJSON(data: { current: Track | null; queue: Track[]; history: Track[] }) {
+    this.#current = data.current ?? null
+    this.#tracks = Array.isArray(data.queue) ? data.queue : []
+    this.#history = Array.isArray(data.history) ? data.history : []
+  }
 }

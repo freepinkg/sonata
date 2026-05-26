@@ -28,14 +28,25 @@ export class Player {
   #events: PlayerEventHandlers
   #loopMode: 'none' | 'track' | 'queue' = 'none'
 
-  constructor(guildId: string, events: PlayerEventHandlers, stickyFile = '') {
+  constructor(guildId: string, events: PlayerEventHandlers, stickyFile = '', opts?: { defaultVolume?: number; shuffle?: boolean; maxHistorySize?: number; emptyRepeatMode?: 'none' | 'track' | 'queue'; perSourceLimits?: Record<string, number>; djMode?: any; collaborative?: any }) {
     this.guildId = guildId
     this.#events = events
-    this.#queue = new Queue(stickyFile)
+    this.#queue = new Queue(stickyFile, {}, {
+      maxHistorySize: opts?.maxHistorySize,
+      emptyRepeatMode: opts?.emptyRepeatMode,
+      perSourceLimits: opts?.perSourceLimits,
+      djMode: opts?.djMode,
+      collaborative: opts?.collaborative,
+    })
+    if (opts?.defaultVolume) this.#volume = opts.defaultVolume
+    if (opts?.shuffle && this.#queue.length > 0) this.#queue.shuffle()
   }
 
   play(track?: Track | null) {
     if (!track) track = this.#queue.dequeue()
+    if (!track) {
+      track = this.#queue.getNextTrack()
+    }
     if (!track) {
       this.#state = State.Stopped
       this.#events.onQueueEnd(this)
@@ -153,5 +164,33 @@ export class Player {
       connected: this.#voice?.connected ?? false,
       ping: this.#voice?.ping ?? 0,
     }
+  }
+
+  toSnapshot() {
+    return {
+      guildId: this.guildId,
+      track: this.track,
+      queue: this.#queue.toJSON(),
+      position: this.position,
+      volume: this.#volume,
+      filters: this.#filters,
+      paused: this.#state === State.Paused,
+      loopMode: this.#loopMode,
+      timestamp: Date.now(),
+    }
+  }
+
+  fromSnapshot(snapshot: ReturnType<Player['toSnapshot']>) {
+    this.#volume = snapshot.volume
+    this.#filters = snapshot.filters
+    this.#loopMode = snapshot.loopMode ?? 'none'
+    this.#queue.fromJSON(snapshot.queue)
+    if (snapshot.track) {
+      this.#queue.setCurrent(snapshot.track)
+    }
+    if (snapshot.paused) {
+      this.#state = State.Paused
+    }
+    this.#position = snapshot.position
   }
 }

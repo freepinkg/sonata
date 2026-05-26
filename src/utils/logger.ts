@@ -1,6 +1,7 @@
-import { createWriteStream, existsSync, mkdirSync, WriteStream } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, renameSync, readFileSync, writeFileSync, unlinkSync, WriteStream } from 'node:fs'
 import { dirname } from 'node:path'
 import { inspect } from 'node:util'
+import { gzipSync } from 'node:zlib'
 import chalk from 'chalk'
 
 const LEVELS = ['trace', 'verbose', 'debug', 'normal', 'warn', 'error'] as const
@@ -65,8 +66,12 @@ export class Logger {
   #moduleLevels: Record<string, string>
   #fileCfg: any
   #fileStream: WriteStream | null = null
+  #fileBytes: number = 0
   #module: string
   #excludePaths: string[] = []
+  #colorize: boolean = true
+  #showPid: boolean = false
+  #tsFormat: string = 'default'
 
   constructor(cfg: {
     level?: string
@@ -75,12 +80,18 @@ export class Logger {
     file?: { enabled?: boolean; path?: string; maxSize?: number; maxFiles?: number; compress?: boolean }
     excludePaths?: string[]
     module?: string
+    colorize?: boolean
+    showPid?: boolean
+    tsFormat?: string
   }) {
     this.#levelIdx = normalizeLevel(cfg.level ?? 'normal')
     this.#format = cfg.format ?? 'text'
     this.#moduleLevels = cfg.moduleLevels ?? {}
     this.#module = cfg.module ?? ''
     this.#excludePaths = cfg.excludePaths ?? []
+    this.#colorize = cfg.colorize ?? true
+    this.#showPid = cfg.showPid ?? false
+    this.#tsFormat = cfg.tsFormat ?? 'default'
     this.#fileCfg = cfg.file ?? null
     if (this.#fileCfg?.enabled && this.#fileCfg.path) {
       const dir = dirname(this.#fileCfg.path)
@@ -99,6 +110,16 @@ export class Logger {
     return lvl >= this.#levelIdx
   }
 
+  #timestamp(): string {
+    switch (this.#tsFormat) {
+      case 'iso': return new Date().toISOString()
+      case 'epoch': return String(Date.now())
+      case 'relative': return process.uptime().toFixed(3)
+      case 'none': return ''
+      default: return ts()
+    }
+  }
+
   #fmt(level: Level, module: string, msg: string, args: any[]): string {
     let fullMsg = msg
     if (args.length > 0) {
@@ -109,27 +130,72 @@ export class Logger {
       }).join(' ')}`
     }
     const style = LEVEL_STYLES[level]
-    const mod = module ? moduleColor(module)(` ${module} `) : ''
-    return `${chalk.dim(`[${ts()}]`)} ${style.dot}${mod}· ${fullMsg}`
+    const tsStr = this.#timestamp()
+    const tsPrefix = tsStr ? `[${tsStr}]` : ''
+    const pidPrefix = this.#showPid ? `[${process.pid}]` : ''
+    if (this.#colorize) {
+      const mod = module ? moduleColor(module)(` ${module} `) : ''
+      return `${pidPrefix}${chalk.dim(tsPrefix)} ${style.dot}${mod}· ${fullMsg}`
+    }
+    const mod = module ? ` ${module} ` : ''
+    return `${pidPrefix}${tsPrefix} ${LEVEL_STYLES[level].label}${mod}· ${fullMsg}`
+  }
+
+  #rotate() {
+    const basePath = this.#fileCfg?.path
+    if (!basePath || !this.#fileStream) return
+    const maxFiles = this.#fileCfg.maxFiles ?? 5
+    const compress = this.#fileCfg.compress ?? false
+
+    this.#fileStream.close()
+    this.#fileStream = null
+
+    const oldest = `${basePath}.${maxFiles}${compress ? '.gz' : ''}`
+    if (existsSync(oldest)) unlinkSync(oldest)
+
+    for (let i = maxFiles - 1; i >= 1; i--) {
+      const src = `${basePath}.${i}${compress ? '.gz' : ''}`
+      const dst = `${basePath}.${i + 1}${compress ? '.gz' : ''}`
+      if (existsSync(src)) renameSync(src, dst)
+    }
+
+    if (existsSync(basePath)) {
+      if (compress) {
+        const data = readFileSync(basePath)
+        writeFileSync(`${basePath}.1.gz`, gzipSync(data))
+        unlinkSync(basePath)
+      } else {
+        renameSync(basePath, `${basePath}.1`)
+      }
+    }
+
+    this.#fileStream = createWriteStream(basePath, { flags: 'a' })
+    this.#fileBytes = 0
   }
 
   #write(level: Level, module: string, msg: string, ...args: any[]) {
     if (!this.#shouldLog(level)) return
 
     if (this.#format === 'json') {
-      const entry = JSON.stringify({
+      const entry: any = {
         timestamp: new Date().toISOString(),
         level: LEVEL_STYLES[level].label,
         module,
         message: msg,
-        args: args.length > 0 ? args.map(a => a instanceof Error ? a.message : a) : undefined,
-      })
-      process.stderr.write(entry + '\n')
+      }
+      if (this.#showPid) entry.pid = process.pid
+      if (args.length > 0) entry.args = args.map(a => a instanceof Error ? a.message : a)
+      process.stderr.write(JSON.stringify(entry) + '\n')
     } else {
       process.stderr.write(this.#fmt(level, module, msg, args) + '\n')
     }
 
     if (this.#fileStream) {
+      if (this.#fileCfg?.maxSize && this.#fileBytes >= this.#fileCfg.maxSize) {
+        this.#rotate()
+        if (!this.#fileStream) return
+      }
+
       const label = LEVEL_STYLES[level].label
       const mod = module ? ` ${module} >` : ''
       const tsFull = new Date().toISOString()
@@ -141,7 +207,9 @@ export class Logger {
           return String(a)
         }).join(' ')}`
       }
-      this.#fileStream.write(`[${tsFull}] [${label}]${mod} ${fullMsg}\n`)
+      const line = `[${tsFull}] [${label}]${mod} ${fullMsg}\n`
+      this.#fileStream.write(line)
+      this.#fileBytes += Buffer.byteLength(line)
     }
   }
 
@@ -168,6 +236,9 @@ export class Logger {
     return new Logger({
       level: LEVELS[this.#levelIdx],
       format: this.#format,
+      colorize: this.#colorize,
+      showPid: this.#showPid,
+      tsFormat: this.#tsFormat,
       moduleLevels: this.#moduleLevels,
       file: this.#fileCfg,
       module,
@@ -183,7 +254,11 @@ export function createLogger(cfg: any): Logger {
   return new Logger({
     level: cfg.level ?? 'normal',
     format: cfg.format ?? 'text',
+    colorize: cfg.colorize,
+    showPid: cfg.showPid,
+    tsFormat: cfg.timestampFormat,
     moduleLevels: cfg.moduleLevels ?? {},
     file: cfg.file ?? null,
+    excludePaths: cfg.excludePaths,
   })
 }

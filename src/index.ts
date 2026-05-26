@@ -20,6 +20,12 @@ import { WebhookManager } from '#webhooks/index'
 import { MaintenanceMode } from '#maintenance/index'
 import { AuditLogger } from '#audit/index'
 import { RadioMode } from '#radio/index'
+import { DatabaseManager } from '#database/index'
+import { RecordingManager } from '#recording/index'
+import { SSEManager } from '#sse/index'
+import { initSentry } from '#tracing/sentry'
+import { DatadogStatsD } from '#tracing/datadog'
+import { initOpenTelemetry } from '#tracing/opentelemetry'
 
 const cfg = await loadConfig(process.argv[2])
 const logger = createLogger(cfg.logging)
@@ -45,7 +51,7 @@ await resolver.init({
   jiosaavn: cfg.sources.jiosaavn,
   http: cfg.sources.http === true || typeof cfg.sources.http === 'object',
   local: cfg.sources.local === true || typeof cfg.sources.local === 'object',
-})
+}, cfg.resolving)
 
 let cache: TrackCache | null = null
 if (cfg.cache?.enabled) {
@@ -100,6 +106,41 @@ if (discordCfg?.enabled && discordCfg?.token) {
   }).catch((err: any) => logger.warn('Discord', `Gateway init failed: ${err.message}`))
 }
 
+// Database
+if (cfg.database?.enabled) {
+  const db = new DatabaseManager(cfg.database)
+  db.setLogger(logger)
+  await db.connect()
+}
+
+// Recording
+if (cfg.recording?.enabled) {
+  const recording = new RecordingManager(cfg.recording)
+  recording.setLogger(logger)
+}
+
+// Sentry
+await initSentry(cfg.sentry ?? { enabled: false }, logger)
+
+// Datadog
+let datadog: DatadogStatsD | null = null
+if (cfg.datadog?.enabled) {
+  datadog = new DatadogStatsD(cfg.datadog)
+  datadog.setLogger(logger)
+  datadog.start()
+  logger.info('Datadog', `StatsD agent: ${cfg.datadog.agentHost}:${cfg.datadog.agentPort}`)
+}
+
+// OpenTelemetry
+if (cfg.opentelemetry?.enabled && cfg.opentelemetry?.endpoint) {
+  await initOpenTelemetry(cfg.opentelemetry, logger)
+}
+
+// SSE
+const sse = new SSEManager(cfg.sse ?? { enabled: false })
+sse.setLogger(logger)
+sse.start()
+
 const audit = new AuditLogger(cfg.logging?.audit ?? { enabled: false })
 const maintenance = new MaintenanceMode(cfg.maintenance ?? { enabled: false }, [cfg.server.password, ...(cfg.server.tokens ?? [])], ['/maintenance/enable', '/maintenance/disable'])
 
@@ -112,6 +153,11 @@ const srv = new Server({
   security: cfg.security,
   customHeaders: cfg.server.customHeaders,
   correlationId: cfg.logging?.correlationId,
+  maxBodySize: cfg.server.maxBodySize,
+  socketTimeout: cfg.server.socketTimeout,
+  keepAliveTimeout: cfg.server.keepAliveTimeout,
+  trustProxy: cfg.server.trustProxy,
+  trustedIps: cfg.server.trustedIps,
 })
 const auth = new AuthManager([
   cfg.server.password,
@@ -141,6 +187,7 @@ const pm = new PlayerManager({
     wsHandler.onPlayerUpdate(p, state)
     pluginManager.emitPlayerUpdate(p.guildId, state)
     if (metrics) metrics.playersActive.set(pm.count())
+    sse.send('playerUpdate', { guildId: p.guildId, state })
     if (state.track && !state.paused) {
       const progress = formatTrackProgress(state.position, state.track.info.duration)
       const mem = Math.round(process.memoryUsage().rss / 1024 / 1024)
@@ -150,6 +197,18 @@ const pm = new PlayerManager({
   onQueueEnd: (p) => {
     wsHandler.onQueueEnd(p)
     pluginManager.emitQueueEnd(p.guildId)
+
+    // Smart queue: auto-fill from history
+    const smartQ = cfg.queue?.smartQueue
+    if (smartQ?.enabled && p.queue.length < (smartQ.minTracksToTrigger ?? 5)) {
+      const radio = new RadioMode(resolver, { enabled: true, source: 'youtube', basedOn: 'history' }, logger)
+      radio.generateTrack(p.queue.history).then(track => {
+        if (track && p.queue.enqueue(track) === null) {
+          audit.log('smartQueue.fill', { guildId: p.guildId, track: track.info.title })
+        }
+      })
+    }
+
     if (cfg.player?.autoPlay && p.queue.length > 0) {
       const next = p.queue.dequeue()
       if (next) p.play(next)
@@ -163,10 +222,22 @@ const pm = new PlayerManager({
       })
     }
   },
-}, Boolean(cfg.player?.stickyQueue), cfg.player?.stickyQueueFile ?? '', cfg.queue?.filters)
+}, Boolean(cfg.player?.stickyQueue), cfg.player?.stickyQueueFile ?? '', cfg.queue?.filters, cfg.queue)
+
+// Snapshot config
+const snapCfg = cfg.player?.snapshot
+if (snapCfg?.enabled) {
+  pm.setSnapshotConfig({
+    enabled: snapCfg.enabled,
+    dir: snapCfg.dir ?? 'data/snapshots',
+    autoSave: snapCfg.autoSave ?? true,
+    saveIntervalMs: snapCfg.saveIntervalMs ?? 60_000,
+    maxSnapshots: snapCfg.maxSnapshots ?? 10,
+  })
+}
 
 // proxy is logged in logBanner now
-const wsHandler = new LavalinkWS(pm, sessions, { queue: cfg.queue, player: cfg.player, proxy: cfg.proxy, youtube: cfg.sources?.youtube }, logger)
+const wsHandler = new LavalinkWS(pm, sessions, { queue: cfg.queue, player: { ...cfg.player, ducking: cfg.player?.ducking, gapless: cfg.player?.gapless, fade: cfg.player?.fade, autoVolume: cfg.player?.autoVolume, introOutro: cfg.player?.introOutro, snapshot: cfg.player?.snapshot }, voice: cfg.voice, ws: cfg.ws, proxy: cfg.proxy, youtube: cfg.sources?.youtube }, logger)
 
 // Auto-leave (voice activity detection)
 if (cfg.player?.autoLeaveMs && cfg.player.autoLeaveMs > 0) {
@@ -283,11 +354,41 @@ if (cfg.server.dashboard) {
         return !!v
       })
       .map(([k]) => k),
-  })))
+  }), cfg.dashboard))
 
   const { createDashboardWS } = await import('./dashboard/ws.js')
   const dashboardWSS = srv.addWS(`${cfg.server.dashboard}/ws`, { auth: false })
   dashboardWSS.on('connection', createDashboardWS(pm))
+}
+
+// SSE
+if (cfg.sse?.enabled) {
+  const ssePath = cfg.sse.path ?? '/events'
+  srv.handle('GET', ssePath, (req, res) => {
+    sse.handleConnection(req, res)
+  })
+  srv.noAuth(ssePath)
+}
+
+// Health checks
+if (cfg.healthChecks?.enabled) {
+  const hcInterval = cfg.healthChecks.intervalMs ?? 30_000
+  setInterval(async () => {
+    const results: Record<string, string> = {}
+    for (const check of cfg.healthChecks?.checks ?? []) {
+      if (check === 'sentry') results.sentry = cfg.sentry?.enabled && !!cfg.sentry?.dsn ? 'ok' : 'disabled'
+      else if (check === 'sources') {
+        const sourceCount = Object.entries(cfg.sources).filter(([k, v]) => {
+          if (k === 'priority' || k === 'userAgent' || k === 'requestTimeout') return false
+          return typeof v === 'object' ? (v as any).enabled : !!v
+        }).length
+        results.sources = `${sourceCount} sources`
+      } else if (check === 'database') results.database = cfg.database?.enabled ? 'ok' : 'disabled'
+      else if (check === 'memory') results.memory = `${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`
+      else results[check] = 'unknown'
+    }
+    logger.debug('HealthChecks', JSON.stringify(results))
+  }, hcInterval)
 }
 
 // Metrics
@@ -331,6 +432,8 @@ const shutdownDelay = cfg.shutdownDelay ?? 10_000
 async function shutdown() {
   logger.info('System', 'Shutting down...')
   pm.reset()
+  sse?.stop()
+  datadog?.stop()
   await new Promise(r => setTimeout(r, 100))
   srv.close().then(() => process.exit(0))
 }

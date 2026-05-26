@@ -1,5 +1,6 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
+import { createServer as createHttp2Server, createSecureServer as createHttp2SecureServer } from 'node:http2'
 import { readFileSync } from 'node:fs'
 import { brotliCompressSync, gzipSync, deflateSync } from 'node:zlib'
 import { WebSocketServer } from '@sonata-sdk/ws/server'
@@ -52,16 +53,36 @@ export class Server {
   #security: SecurityConfig = {}
   #customHeaders: Record<string, string> = {}
   #correlationId: boolean = false
+  #maxBodySize: number = 0
+  #trustProxy: boolean = false
+  #trustedIps: Set<string> = new Set()
 
-  constructor(opts: { logger?: Logger; password?: string; ssl?: SSLOpts; compression?: boolean | string; http2?: boolean; security?: SecurityConfig; customHeaders?: Record<string, string>; correlationId?: boolean }) {
+  constructor(opts: { logger?: Logger; password?: string; ssl?: SSLOpts; compression?: boolean | string; http2?: boolean; security?: SecurityConfig; customHeaders?: Record<string, string>; correlationId?: boolean; maxBodySize?: number; socketTimeout?: number; keepAliveTimeout?: number; trustProxy?: boolean; trustedIps?: string[] }) {
     this.#logger = opts.logger ?? createLogger({ level: 'normal' })
     this.#password = opts.password ?? ''
     this.#compression = opts.compression ?? false
     this.#security = opts.security ?? {}
     this.#customHeaders = opts.customHeaders ?? {}
     this.#correlationId = opts.correlationId ?? false
+    this.#maxBodySize = opts.maxBodySize ?? 0
+    this.#trustProxy = opts.trustProxy ?? false
+    this.#trustedIps = new Set(opts.trustedIps ?? [])
 
-    if (opts.ssl?.key && opts.ssl?.cert) {
+    if (opts.http2) {
+      if (opts.ssl?.key && opts.ssl?.cert) {
+        const sslOpts: any = {
+          key: readFileSync(opts.ssl.key),
+          cert: readFileSync(opts.ssl.cert),
+          allowHTTP1: true,
+        }
+        if (opts.ssl.ca) sslOpts.ca = readFileSync(opts.ssl.ca)
+        if (opts.ssl.passphrase) sslOpts.passphrase = opts.ssl.passphrase
+        if (opts.ssl.secureOptions) sslOpts.secureOptions = opts.ssl.secureOptions
+        this.#server = createHttp2SecureServer(sslOpts)
+      } else {
+        this.#server = createHttp2Server({ allowHTTP1: true } as any)
+      }
+    } else if (opts.ssl?.key && opts.ssl?.cert) {
       const sslOpts: any = {
         key: readFileSync(opts.ssl.key),
         cert: readFileSync(opts.ssl.cert),
@@ -75,6 +96,8 @@ export class Server {
       this.#server = createServer()
     }
 
+    this.#server.timeout = opts.socketTimeout ?? 0
+    this.#server.keepAliveTimeout = opts.keepAliveTimeout ?? 5000
     this.#server.on('request', (req: IncomingMessage, res: ServerResponse) => this.#handle(req, res))
   }
 
@@ -205,8 +228,18 @@ export class Server {
       if (handled) return
     }
 
+    // Client IP (trust proxy)
+    let clientIp = ''
+    if (this.#trustProxy || this.#trustedIps.size > 0) {
+      clientIp = this.#trustProxy
+        ? (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket.remoteAddress ?? ''
+        : req.socket.remoteAddress ?? ''
+    }
+
     // Auth
-    if (this.#password && !this.#noAuthPaths.has(pathname)) {
+    if (this.#trustedIps.size > 0 && clientIp && this.#trustedIps.has(clientIp)) {
+      // skip auth for trusted IPs
+    } else if (this.#password && !this.#noAuthPaths.has(pathname)) {
       const auth = req.headers['authorization']
       if (auth !== this.#password) return this.#json(res, 401, { error: 'Unauthorized' })
     }
@@ -219,7 +252,7 @@ export class Server {
       const params: Record<string, string> = {}
       for (let i = 0; i < route.paramNames.length; i++) params[route.paramNames[i]] = match[i + 1]
 
-      this.#readBody(req, (body) => {
+      this.#readBody(req, res, (body) => {
         Promise.resolve(route.handler(req, res, params, body))
           .catch((err) => {
             this.#logger.error('http', `request handler error: ${err.message || err}`)
@@ -244,14 +277,25 @@ export class Server {
     return body
   }
 
-  #readBody(req: IncomingMessage, cb: (body: any) => void) {
+  #readBody(req: IncomingMessage, res: ServerResponse, cb: (body: any) => void) {
     const ct = req.headers['content-type'] ?? ''
     if (!ct.includes('application/json') && !ct.includes('text/plain') && !ct.includes('x-www-form-urlencoded')) {
       return cb(undefined)
     }
     const chunks: Buffer[] = []
-    req.on('data', (c) => chunks.push(c))
+    let size = 0
+    req.on('data', (c: Buffer) => {
+      size += c.length
+      if (this.#maxBodySize > 0 && size > this.#maxBodySize) {
+        chunks.length = 0
+        req.destroy()
+        this.#json(res, 413, { error: 'Payload Too Large' })
+        return
+      }
+      chunks.push(c)
+    })
     req.on('end', () => {
+      if (this.#maxBodySize > 0 && size > this.#maxBodySize) return
       const raw = Buffer.concat(chunks).toString()
       if (!raw) return cb(undefined)
       try { cb(JSON.parse(raw)) }

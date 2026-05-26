@@ -1297,3 +1297,10 @@
 [2026-05-26T03:48:43.180Z] [info] Sessions > Created 5d98d26b86b6273d (timeout: 300s)
 [2026-05-26T03:48:43.180Z] [info] Sessions > Created session 5d98d26b86b6273d (resume: false)
 [2026-05-26T03:48:43.180Z] [info] http > POST /v4/sessions 201 1ms
+[2026-05-26T03:53:30.688Z] [debug] Memory > rss 87.8MB  ·  heap 13.5/15.6MB  ·  ext 3.7MB
+[2026-05-26T03:54:30.683Z] [info] Sessions > Expired 5d98d26b86b6273d (inactive for 300s)
+[2026-05-26T03:54:30.683Z] [info] Sessions > Removed 5d98d26b86b6273d
+[2026-05-26T03:58:30.688Z] [debug] Memory > rss 88.4MB  ·  heap 14.5/16.1MB  ·  ext 3.7MB
+[2026-05-26T04:03:30.688Z] [debug] Memory > rss 89.2MB  ·  heap 15.4/16.8MB  ·  ext 3.7MB
+[2026-05-26T04:08:30.689Z] [debug] Memory > rss 90.2MB  ·  heap 16.0/17.6MB  ·  ext 3.7MB
+[2026-05-26T04:13:30.689Z] [debug] Memory > rss 91.0MB  ·  heap 16.6/18.6MB  ·  ext 3.7MB
