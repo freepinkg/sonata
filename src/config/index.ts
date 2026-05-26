@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { resolve, dirname } from 'node:path'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 import type { Config } from '../types/index.js'
 
 const DEFAULTS: Config = {
@@ -187,7 +187,7 @@ const DEFAULTS: Config = {
 
 export async function loadConfig(path?: string): Promise<Config> {
   const cfg = structuredClone(DEFAULTS) as Config
-  const configPath = path ?? resolve(process.cwd(), 'config.js')
+  const configPath = path ?? resolve(dirname(fileURLToPath(import.meta.url)), '../../config.js')
   if (existsSync(configPath)) {
     const url = pathToFileURL(configPath).href
     const mod = await import(url)

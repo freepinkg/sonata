@@ -1,10 +1,12 @@
 import https from 'node:https'
+import { SocksProxyAgent } from 'socks-proxy-agent'
 import type { Track } from '../../types/index.js'
 import type { AudioSource } from '../manager.js'
 
 const DEEZER_REGEX = /^https?:\/\/(?:www\.)?deezer\.com\//
 const API_BASE = 'https://api.deezer.com'
 const GW_URL = 'https://www.deezer.com/ajax/gw-light.php'
+const MEDIA_URL = 'https://media.deezer.com/v1/get_url'
 
 interface DeezerTrack {
   id: number
@@ -35,28 +37,40 @@ interface DeezerPlaylist {
 }
 
 interface DeezerTrackData {
-  sng_id: number
-  md5_origin: string
-  media_version: number
-  filesize: number
-  track_token: string
+  sngId: number
+  md5Origin: string
+  mediaVersion: string
+  filesize: string
+  trackToken: string
+  trackTokenExpire: number
 }
+
+const MEDIA_FORMATS = [
+  { cipher: 'BF_CBC_STRIPE', format: 'FLAC' },
+  { cipher: 'BF_CBC_STRIPE', format: 'MP3_256' },
+  { cipher: 'BF_CBC_STRIPE', format: 'MP3_128' },
+  { cipher: 'BF_CBC_STRIPE', format: 'MP3_MISC' },
+]
 
 export class DeezerSource implements AudioSource {
   name = 'deezer'
   #arl: string
   #sid: string | null = null
   #sidExpires = 0
+  #apiToken: string | null = null
+  #apiTokenExpires = 0
+  #licenseToken: string | null = null
+  #licenseTokenExpires = 0
   #proxy: string | null = null
   #agent: any = null
+
+  #logger: any = null
 
   constructor(config?: { arl?: string; decryptionKey?: string; proxy?: string }) {
     this.#arl = config?.arl ?? ''
     this.#proxy = config?.proxy ?? null
     if (this.#proxy) {
-      import('socks-proxy-agent').then(mod => {
-        this.#agent = new mod.SocksProxyAgent(this.#proxy!)
-      }).catch(() => {})
+      this.#agent = new SocksProxyAgent(this.#proxy)
     }
   }
 
@@ -147,7 +161,13 @@ export class DeezerSource implements AudioSource {
   }
 
   async #getSID(): Promise<string | null> {
-    if (this.#sid && Date.now() < this.#sidExpires) return this.#sid
+    if (
+      this.#sid && this.#apiToken && this.#licenseToken &&
+      Date.now() < this.#sidExpires &&
+      Date.now() < this.#apiTokenExpires &&
+      Date.now() < this.#licenseTokenExpires
+    ) return this.#sid
+
     if (!this.#arl) return null
 
     try {
@@ -161,22 +181,26 @@ export class DeezerSource implements AudioSource {
         redirect: 'manual',
       })
 
-      const setCookie = res.headers.get('set-cookie') ?? ''
-      const match = setCookie.match(/sid=([^;]+)/)
-      if (match) {
-        this.#sid = match[1]
-        this.#sidExpires = Date.now() + 3600_000 // 1h
-        return this.#sid
-      }
-
       const text = await res.text()
       try {
         const json = JSON.parse(text)
-        if (json.results?.SESSION) {
-          this.#sid = json.results.SESSION
+        const r = json.results ?? {}
+        const sid = r.SESSION_ID
+        if (sid) {
+          this.#sid = sid
           this.#sidExpires = Date.now() + 3600_000
-          return this.#sid
         }
+        const token = r.checkForm
+        if (token) {
+          this.#apiToken = token
+          this.#apiTokenExpires = Date.now() + 3600_000
+        }
+        const licenseToken = r.USER?.OPTIONS?.license_token
+        if (licenseToken) {
+          this.#licenseToken = licenseToken
+          this.#licenseTokenExpires = Date.now() + 3600_000
+        }
+        if (sid) return this.#sid
       } catch {}
 
       return null
@@ -187,10 +211,10 @@ export class DeezerSource implements AudioSource {
 
   async #getTrackData(trackId: number): Promise<DeezerTrackData | null> {
     const sid = await this.#getSID()
-    if (!sid) return null
+    if (!sid || !this.#apiToken) return null
 
     try {
-      const res = await this.#fetch(`${GW_URL}?method=song.getData&api_version=1.0&api_token=`, {
+      const res = await this.#fetch(`${GW_URL}?method=song.getData&api_version=1.0&api_token=${this.#apiToken}`, {
         method: 'POST',
         headers: {
           Cookie: `sid=${sid}`,
@@ -200,34 +224,58 @@ export class DeezerSource implements AudioSource {
       })
 
       const json: any = await res.json()
-      const data = json?.results?.DATA
-      if (!data?.md5_origin) return null
+      const data = json?.results
+      if (!data?.MD5_ORIGIN) return null
 
       return {
-        sng_id: data.sng_id,
-        md5_origin: data.md5_origin,
-        media_version: data.media_version,
-        filesize: data.filesize,
-        track_token: data.track_token,
+        sngId: data.SNG_ID,
+        md5Origin: data.MD5_ORIGIN,
+        mediaVersion: data.MEDIA_VERSION,
+        filesize: String(data.FILESIZE),
+        trackToken: data.TRACK_TOKEN,
+        trackTokenExpire: data.TRACK_TOKEN_EXPIRE,
       }
     } catch {
       return null
     }
   }
 
-  #buildStreamUrl(data: DeezerTrackData): string | null {
-    const { sng_id, md5_origin, media_version, filesize, track_token } = data
-    if (!md5_origin) return null
+  async #getStreamUrl(trackToken: string): Promise<string | null> {
+    if (!this.#licenseToken) return null
 
-    const cdn = (sng_id % 10) + 1
+    try {
+      const res = await fetch(MEDIA_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          license_token: this.#licenseToken,
+          media: [{ type: 'FULL', formats: MEDIA_FORMATS }],
+          track_tokens: [trackToken],
+        }),
+      })
+
+      if (!res.ok) return null
+
+      const json: any = await res.json()
+      return json?.data?.[0]?.media?.[0]?.sources?.[0]?.url ?? null
+    } catch {
+      return null
+    }
+  }
+
+  #buildStreamUrl(data: DeezerTrackData): string | null {
+    const { sngId, md5Origin, mediaVersion, filesize, trackToken } = data
+    if (!md5Origin) return null
+
+    const cdn = (sngId % 10) + 1
     const params = new URLSearchParams({
-      track_id: String(sng_id),
-      media_version: String(media_version),
-      filesize: String(filesize),
-      track_token,
+      track_id: String(sngId),
+      media_version: mediaVersion,
+      filesize,
+      track_token: trackToken,
     })
 
-    return `https://e-cdns-proxy-${cdn}.dzcdn.net/mobile/1/${md5_origin}?${params}`
+    return `https://e-cdns-proxy-${cdn}.dzcdn.net/mobile/1/${md5Origin}?${params}`
   }
 
   async #make(t: DeezerTrack): Promise<Track> {
@@ -236,9 +284,14 @@ export class DeezerSource implements AudioSource {
 
     if (this.#arl) {
       const trackData = await this.#getTrackData(id)
-      if (trackData) {
-        const streamUrl = this.#buildStreamUrl(trackData)
-        if (streamUrl) audioUrl = streamUrl
+      if (trackData?.trackToken) {
+        const mediaUrl = await this.#getStreamUrl(trackData.trackToken)
+        if (mediaUrl) {
+          audioUrl = mediaUrl
+        } else {
+          const streamUrl = this.#buildStreamUrl(trackData)
+          if (streamUrl) audioUrl = streamUrl
+        }
       }
     }
 
