@@ -12,12 +12,14 @@ import { AuthManager } from './middleware/auth.js'
 import { corsHandler } from './middleware/cors.js'
 import { dashboardHandler } from './dashboard/index.js'
 import { createLogger } from './utils/logger.js'
-import { logStartup, logStartupBanner, logMemory } from './utils/logging.js'
+import { logBanner, logMemory } from './utils/logging.js'
 import { showBanner, formatTrackProgress } from './console/index.js'
 import { VERSION } from './version.js'
 
 const cfg = await loadConfig(process.argv[2])
 const logger = createLogger(cfg.logging)
+
+logBanner(cfg, logger)
 
 const resolver = new Resolver()
 resolver.setLogger(logger)
@@ -252,11 +254,7 @@ if (process.env['NODE_ENV'] !== 'test') {
   setInterval(() => logMemory(logger), 300_000)
 }
 
-// Startup info
-logStartupBanner(logger)
-
 // Start
 srv.listen(cfg.server.port, cfg.server.host, () => {
   showBanner(cfg)
-  logStartup(cfg, pluginManager.all.length, logger)
 })
