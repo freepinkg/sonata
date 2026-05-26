@@ -66,18 +66,21 @@ export class Logger {
   #fileCfg: any
   #fileStream: WriteStream | null = null
   #module: string
+  #excludePaths: string[] = []
 
   constructor(cfg: {
     level?: string
     format?: string
     moduleLevels?: Record<string, string>
     file?: { enabled?: boolean; path?: string; maxSize?: number; maxFiles?: number; compress?: boolean }
+    excludePaths?: string[]
     module?: string
   }) {
     this.#levelIdx = normalizeLevel(cfg.level ?? 'normal')
     this.#format = cfg.format ?? 'text'
     this.#moduleLevels = cfg.moduleLevels ?? {}
     this.#module = cfg.module ?? ''
+    this.#excludePaths = cfg.excludePaths ?? []
     this.#fileCfg = cfg.file ?? null
     if (this.#fileCfg?.enabled && this.#fileCfg.path) {
       const dir = dirname(this.#fileCfg.path)
@@ -149,6 +152,18 @@ export class Logger {
   warn(module: string, msg: string, ...args: any[]) { this.#write('warn', module, msg, ...args) }
   error(module: string, msg: string, ...args: any[]) { this.#write('error', module, msg, ...args) }
 
+  setLevel(level: string) {
+    this.#levelIdx = normalizeLevel(level)
+  }
+
+  setModuleLevel(module: string, level: string) {
+    this.#moduleLevels[module] = level
+  }
+
+  setModuleLevels(levels: Record<string, string>) {
+    this.#moduleLevels = levels
+  }
+
   child(module: string): Logger {
     return new Logger({
       level: LEVELS[this.#levelIdx],
@@ -156,8 +171,12 @@ export class Logger {
       moduleLevels: this.#moduleLevels,
       file: this.#fileCfg,
       module,
+      excludePaths: this.#excludePaths,
     })
   }
+
+  get level() { return LEVELS[this.#levelIdx] }
+  get moduleLevels() { return { ...this.#moduleLevels } }
 }
 
 export function createLogger(cfg: any): Logger {

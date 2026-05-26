@@ -14,7 +14,8 @@ import type {
 
 const require = createRequire(import.meta.url)
 
-const LEVEL_MAP: Record<string, keyof Logger> = {
+type LogMethod = 'trace' | 'verbose' | 'debug' | 'info' | 'warn' | 'error'
+const LEVEL_MAP: Record<string, LogMethod> = {
   trace: 'trace',
   verbose: 'verbose',
   debug: 'debug',

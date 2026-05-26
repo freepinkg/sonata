@@ -133,6 +133,20 @@ export class Queue extends EventTarget {
     this.#save()
   }
 
+  sortBy(criteria: 'title' | 'author' | 'duration' | 'source', order: 'asc' | 'desc' = 'asc') {
+    this.#tracks.sort((a, b) => {
+      let cmp = 0
+      switch (criteria) {
+        case 'title': cmp = a.info.title.localeCompare(b.info.title); break
+        case 'author': cmp = a.info.author.localeCompare(b.info.author); break
+        case 'duration': cmp = a.info.duration - b.info.duration; break
+        case 'source': cmp = a.source.localeCompare(b.source); break
+      }
+      return order === 'asc' ? cmp : -cmp
+    })
+    this.#save()
+  }
+
   get(index: number): Track | undefined {
     return this.#tracks[index]
   }

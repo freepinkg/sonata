@@ -9,15 +9,17 @@ import { TrackCache } from '../cache/index.js'
 import { encodeTrack } from '../player/encoder.js'
 import type { VoiceState } from '../types/index.js'
 import { getLyrics } from '../lyrics/index.js'
+import { FavoritesManager } from '../favorites/index.js'
 import type { Logger } from '../utils/logger.js'
 
 export class LavalinkAPI {
   #pm: PlayerManager
-  #resolver: Resolver
   #sessions: SessionManager
-  #started: number
+  #resolver: Resolver
   #cache: TrackCache | null
   #logger: Logger | null
+  #started: number
+  #favorites: FavoritesManager
 
   constructor(pm: PlayerManager, resolver: Resolver, sessions: SessionManager, cache: TrackCache | null = null, logger: Logger | null = null) {
     this.#pm = pm
@@ -25,6 +27,7 @@ export class LavalinkAPI {
     this.#sessions = sessions
     this.#cache = cache
     this.#logger = logger
+    this.#favorites = new FavoritesManager()
     this.#started = Date.now()
   }
 
@@ -83,6 +86,17 @@ export class LavalinkAPI {
     srv.handle('PATCH', '/v4/sessions/{id}/players/{guildId}/queue/{index}', (req, res, params, body) => this.#moveInQueue(res, params, body))
     srv.handle('GET', '/v4/sessions/{id}/players/{guildId}/history', (req, res, params) => this.#getHistory(res, params))
     srv.handle('GET', '/lyrics', (req, res) => this.#lyrics(req, res))
+
+    // queue sorting
+    srv.handle('POST', '/v4/sessions/{id}/players/{guildId}/queue/sort', (req, res, params, body) => this.#sortQueue(res, params, body))
+
+    // recently played
+    srv.handle('GET', '/v4/sessions/{id}/players/{guildId}/recently-played', (req, res, params) => this.#getRecentlyPlayed(res, params))
+
+    // favorites
+    srv.handle('GET', '/v4/sessions/{id}/players/{guildId}/favorites', (req, res, params) => this.#getFavorites(res, params))
+    srv.handle('POST', '/v4/sessions/{id}/players/{guildId}/favorites', (req, res, params, body) => this.#addFavorite(res, params, body))
+    srv.handle('DELETE', '/v4/sessions/{id}/players/{guildId}/favorites', (req, res, params, body) => this.#removeFavorite(res, params, body))
   }
 
   #loadTracks(req: IncomingMessage, res: ServerResponse) {
@@ -374,6 +388,42 @@ export class LavalinkAPI {
     } catch {
       this.#json(res, 500, { error: 'Failed to fetch lyrics' })
     }
+  }
+
+  #sortQueue(res: ServerResponse, params: Record<string, string>, body: any) {
+    const p = this.#pm.get(params.guildId)
+    if (!p) return this.#json(res, 404, { error: 'Player not found' })
+    const criteria = body?.criteria ?? 'title'
+    const order = body?.order ?? 'asc'
+    p.queue.sortBy(criteria, order)
+    this.#json(res, 200, p.queue.toArray())
+  }
+
+  #getRecentlyPlayed(res: ServerResponse, params: Record<string, string>) {
+    const p = this.#pm.get(params.guildId)
+    if (!p) return this.#json(res, 404, { error: 'Player not found' })
+    const limit = Math.min(parseInt((new URL(`http://x${res.req ? '' : ''}`)).searchParams.get('limit') ?? '50'), 200)
+    this.#json(res, 200, p.queue.history.slice(-limit).reverse())
+  }
+
+  #getFavorites(res: ServerResponse, params: Record<string, string>) {
+    this.#json(res, 200, this.#favorites.list(params.guildId))
+  }
+
+  #addFavorite(res: ServerResponse, params: Record<string, string>, body: any) {
+    if (!body?.track) return this.#json(res, 400, { error: 'Missing track' })
+    const added = this.#favorites.add(params.guildId, body.track)
+    if (!added) return this.#json(res, 409, { error: 'Track already in favorites' })
+    res.statusCode = 201
+    res.end()
+  }
+
+  #removeFavorite(res: ServerResponse, params: Record<string, string>, body: any) {
+    if (!body?.encoded) return this.#json(res, 400, { error: 'Missing encoded' })
+    const removed = this.#favorites.remove(params.guildId, body.encoded)
+    if (!removed) return this.#json(res, 404, { error: 'Track not in favorites' })
+    res.statusCode = 204
+    res.end()
   }
 
   #json(res: ServerResponse, status: number, data: unknown) {
