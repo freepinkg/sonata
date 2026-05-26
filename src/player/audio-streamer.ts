@@ -5,7 +5,7 @@ import { DiscordVoice } from '../discord/voice.js'
 import { AudioMixer } from '../audio/mixer.js'
 import { WebmOpusDemuxer } from './webm-demuxer.js'
 import { decryptDeezerBuffer } from './blowfish.js'
-import type { Track } from '../types/index.js'
+import type { Track, FilterOptions } from '../types/index.js'
 import type { Logger } from '../utils/logger.js'
 import { createRequire } from 'node:module'
 
@@ -626,6 +626,25 @@ export class AudioStreamer extends EventTarget {
     if (this.#currentTrack) {
       this.#startStream()
     }
+  }
+
+  setPlayerFilters(f: FilterOptions) {
+    if (!this.#mixer) return
+    const mf: any = {}
+    if (f.volume !== undefined) mf.volume = f.volume
+    if (f.equalizer) mf.equalizer = f.equalizer
+    if (f.karaoke) mf.karaoke = f.karaoke
+    if (f.timescale) mf.timescale = f.timescale
+    if (f.tremolo) mf.tremolo = f.tremolo
+    if (f.vibrato) mf.vibrato = f.vibrato
+    if (f.rotation) mf.rotation = f.rotation
+    if (f.distortion) mf.distortion = f.distortion
+    if (f.channelMix) mf.channelMix = f.channelMix
+    if (f.lowPass) mf.lowPass = f.lowPass
+    if (f.highPass) mf.highPass = f.highPass
+    if (f.reverb) mf.reverb = f.reverb
+    if (f.limiter) mf.limiter = f.limiter
+    this.#mixer.setFilters(mf)
   }
 
   setVolume(v: number) {

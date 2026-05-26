@@ -172,6 +172,23 @@ export default {
     stickyQueueFile: '',
     normalization: false,
     normalizationTarget: -14,
+    // Default filters applied to every player (optional).
+    // Lavalink-compatible — all fields can be overridden per-player via API.
+    filters: {
+      // volume:  100,                     // 0 – 1000
+      // equalizer: [],                    // [{ band: 0, gain: 0.25 }, ...]
+      // karaoke:  { level: 0, monoLevel: 1, filterBand: 220, filterWidth: 100 },
+      // timescale: { speed: 1, pitch: 1, rate: 1 },
+      // tremolo:  { frequency: 2, depth: 0 },
+      // vibrato:  { frequency: 2, depth: 0 },
+      // rotation: { rotationHz: 0 },
+      // distortion: { sinOffset: 0, sinScale: 1, cosOffset: 0, cosScale: 1, tanOffset: 0, tanScale: 1 },
+      // channelMix: { leftToLeft: 1, leftToRight: 0, rightToLeft: 0, rightToRight: 1 },
+      // lowPass:  { smoothing: 1 },
+      // highPass: { smoothing: 0 },
+      // reverb:   { delay: 0.05, decay: 0.3, mix: 0 },
+      // limiter:  { threshold: 1, attack: 0.002, release: 0.1, ratio: 20 },
+    },
   },
 
   // ── Cache ───────────────────────────────────────────────────────────

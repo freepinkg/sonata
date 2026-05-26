@@ -103,6 +103,7 @@ const DEFAULTS: Config = {
     stickyQueueFile: '',
     normalization: false,
     normalizationTarget: -14,
+    filters: {},
   },
   cache: {
     enabled: true,

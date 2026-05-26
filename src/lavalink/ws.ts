@@ -22,12 +22,13 @@ export class LavalinkWS {
   #crossfade: { duration: number; fadeIn: number; fadeOut: number } | null = null
   #normalizationEnabled = false
   #normalizationTarget = -14
+  #defaultFilters: any = null
   #logger: Logger | null
   #youtubeConfig: any
 
   #proxy: { socks?: string } | null = null
 
-  constructor(pm: PlayerManager, sessions: SessionManager, cfg?: { queue?: { crossfade?: number; crossfadeFadeIn?: number; crossfadeFadeOut?: number }; player?: { normalization?: boolean; normalizationTarget?: number }; proxy?: { socks?: string }; youtube?: any }, logger?: Logger) {
+  constructor(pm: PlayerManager, sessions: SessionManager, cfg?: { queue?: { crossfade?: number; crossfadeFadeIn?: number; crossfadeFadeOut?: number }; player?: { normalization?: boolean; normalizationTarget?: number; filters?: any }; proxy?: { socks?: string }; youtube?: any }, logger?: Logger) {
     this.pm = pm
     this.sessions = sessions
     if (cfg?.queue?.crossfade && cfg.queue.crossfade > 0) {
@@ -42,6 +43,9 @@ export class LavalinkWS {
     if (cfg?.player?.normalization) {
       this.#normalizationEnabled = true
       this.#normalizationTarget = cfg.player.normalizationTarget ?? -14
+    }
+    if (cfg?.player?.filters) {
+      this.#defaultFilters = cfg.player.filters
     }
     this.#logger = logger ?? null
   }
@@ -131,6 +135,7 @@ export class LavalinkWS {
         if (this.#logger) streamer.setLogger(this.#logger)
         if (this.#crossfade) streamer.setCrossfade(this.#crossfade)
         if (this.#normalizationEnabled) streamer.setNormalization(true, this.#normalizationTarget)
+        if (this.#defaultFilters) streamer.setPlayerFilters(this.#defaultFilters)
         streamer.addEventListener('start', ((e: CustomEvent) => {
           this.#broadcast(client, 'event', {
             type: 'TrackStartEvent',
@@ -259,6 +264,7 @@ export class LavalinkWS {
         delete f.op
         delete f.guildId
         p.setFilters(f)
+        this.#streamers.get(guildId)?.setPlayerFilters(f)
         break
       }
     }

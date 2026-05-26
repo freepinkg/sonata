@@ -142,6 +142,9 @@ export interface FilterOptions {
   distortion?: DistortionOptions
   channelMix?: ChannelMixOptions
   lowPass?: LowPassOptions
+  highPass?: HighPassOptions
+  reverb?: ReverbOptions
+  limiter?: LimiterOptions
 }
 
 export interface Band {
@@ -196,6 +199,23 @@ export interface ChannelMixOptions {
 
 export interface LowPassOptions {
   smoothing?: number
+}
+
+export interface HighPassOptions {
+  smoothing?: number
+}
+
+export interface ReverbOptions {
+  delay?: number
+  decay?: number
+  mix?: number
+}
+
+export interface LimiterOptions {
+  threshold?: number
+  attack?: number
+  release?: number
+  ratio?: number
 }
 
 export interface Config {
@@ -440,6 +460,8 @@ export interface Config {
     normalization?: boolean
     /** Normalization target LUFS */
     normalizationTarget?: number
+    /** Default filters applied to all players */
+    filters?: FilterOptions
   }
   cache: {
     /** Enable track cache */
