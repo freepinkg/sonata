@@ -112,8 +112,11 @@ Copy `config.example.js` → `config.js`. Every option is documented inline.
 | `cache` | LRU or Redis, TTL, max entries |
 | `metrics` | Prometheus endpoint |
 | `rateLimiting` | Window, max requests, per-user |
+| `security` | HSTS, content-type enforcement, SQLi/XSS blocking |
 | `plugins` | npm packages, local paths, per-plugin config |
 | `clustering` | Multi-node (coming soon) |
+| `resolving` | Search aliases, retry, fallbacks |
+| `dashboard` | Theme, refresh, player controls |
 
 ---
 
@@ -124,7 +127,7 @@ Copy `config.example.js` → `config.js`. Every option is documented inline.
 | <img src="https://www.youtube.com/favicon.ico" width="16" /> YouTube | InnerTube API (5 clients) | ✅ | — |
 | <img src="https://www.soundcloud.com/favicon.ico" width="16" /> SoundCloud | Public API | ✅ | — |
 | <img src="https://www.spotify.com/favicon.ico" width="16" /> Spotify | Web API + YouTube mirror | ✅ | `clientId` + `clientSecret` |
-| <img src="https://www.deezer.com/favicon.ico" width="16" /> Deezer | Public API | ✅ | — |
+| <img src="https://www.deezer.com/favicon.ico" width="16" /> Deezer | Gateway API + CDN | ✅ | `arl` |
 | <img src="https://www.apple.com/favicon.ico" width="16" /> Apple Music | iTunes Search API | ❌ | — |
 | <img src="https://bandcamp.com/favicon.ico" width="16" /> Bandcamp | HTML | ❌ | — |
 | <img src="https://www.twitch.tv/favicon.ico" width="16" /> Twitch | HTML | ❌ | — |
@@ -134,6 +137,8 @@ Copy `config.example.js` → `config.js`. Every option is documented inline.
 | Podcast | RSS/XML | ✅ | — |
 | 🌐 HTTP | Direct URL | ❌ | — |
 | 📁 Local | Filesystem path | ❌ | — |
+
+> **Deezer** requires an `arl` cookie for high-quality streaming. Set `sources.deezer.arl` in config. SOCKS proxy is also supported via `sources.deezer.proxy`.
 
 ---
 
