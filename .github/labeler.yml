@@ -1,0 +1,42 @@
+# Auto-label PRs based on changed paths
+# Requires: .github/workflows/labeler.yml
+
+audio:
+  - changed-files:
+      - any-glob-to-any-file: src/audio/**
+      - any-glob-to-any-file: src/player/**
+
+resolving:
+  - changed-files:
+      - any-glob-to-any-file: src/resolving/**
+
+plugin:
+  - changed-files:
+      - any-glob-to-any-file: src/plugin/**
+
+api:
+  - changed-files:
+      - any-glob-to-any-file: src/lavalink/**
+      - changed-files:
+      - any-glob-to-any-file: src/server/**
+
+docker:
+  - changed-files:
+      - any-glob-to-any-file: Dockerfile
+      - any-glob-to-any-file: docker-compose.yml
+      - any-glob-to-any-file: .dockerignore
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: .github/workflows/*
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file: package.json
+      - any-glob-to-any-file: package-lock.json
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file: README.md
+      - any-glob-to-any-file: docs/**
+      - any-glob-to-any-file: CHANGELOG.md
