@@ -3,6 +3,7 @@ import type { Track } from '../../types/index.js'
 import type { AudioSource } from '../manager.js'
 
 const JIOSAAVN_REGEX = /^https?:\/\/(?:www\.)?jiosaavn\.com\//
+const JS_PREFIX = /^js(?:search)?:/i
 const API_BASE = 'https://www.jiosaavn.com/api.php'
 
 function decryptMediaUrl(encrypted: string, key: string): string | null {
@@ -114,11 +115,12 @@ export class JioSaavnSource implements AudioSource {
   }
 
   matches(url: string): boolean {
-    return JIOSAAVN_REGEX.test(url)
+    return JIOSAAVN_REGEX.test(url) || JS_PREFIX.test(url)
   }
 
   async resolve(query: string): Promise<Track[]> {
     if (query.startsWith('jiosaavnsearch:')) query = query.slice(15).trim()
+    if (JS_PREFIX.test(query)) return this.#search(query.replace(JS_PREFIX, '').trim())
     if (!this.matches(query)) return this.#search(query)
     return this.#resolveUrl(query)
   }

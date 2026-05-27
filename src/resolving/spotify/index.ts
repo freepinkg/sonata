@@ -3,6 +3,7 @@ import type { AudioSource } from '../manager.js'
 import { getLocalToken } from './auth.js'
 
 const SP_REGEX = /^https?:\/\/(?:open\.)?spotify\.com\//
+const SP_PREFIX = /^sp(?:search)?:/i
 const API_BASE = 'https://api.spotify.com/v1'
 const SPCLIENT_BASE = 'https://spclient.wg.spotify.com'
 const PATHFINDER_URL = 'https://api-partner.spotify.com/pathfinder/v2/query'
@@ -147,10 +148,11 @@ export class SpotifySource implements AudioSource {
   }
 
   matches(url: string): boolean {
-    return SP_REGEX.test(url)
+    return SP_REGEX.test(url) || SP_PREFIX.test(url)
   }
 
   async resolve(query: string): Promise<Track[]> {
+    if (SP_PREFIX.test(query)) return this.#search(query.replace(SP_PREFIX, '').trim())
     if (!this.matches(query)) return this.#search(query)
 
     const type = this.#detectType(query)

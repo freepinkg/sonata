@@ -2,6 +2,7 @@ import type { Track } from '../../types/index.js'
 import type { AudioSource } from '../manager.js'
 
 const NICO_REGEX = /^https?:\/\/(?:www\.)?nicovideo\.jp\//
+const NICO_PREFIX = /^nico(?:search)?:/i
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
@@ -17,10 +18,11 @@ export class NicoNicoSource implements AudioSource {
   name = 'nico'
 
   matches(url: string): boolean {
-    return NICO_REGEX.test(url)
+    return NICO_REGEX.test(url) || NICO_PREFIX.test(url)
   }
 
   async resolve(query: string): Promise<Track[]> {
+    if (NICO_PREFIX.test(query)) return this.#search(query.replace(NICO_PREFIX, '').trim())
     if (!this.matches(query)) return this.#search(query)
     try {
       const res = await fetch(query, { headers: { 'User-Agent': UA } })

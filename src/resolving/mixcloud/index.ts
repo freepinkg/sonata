@@ -2,6 +2,7 @@ import type { Track } from '../../types/index.js'
 import type { AudioSource } from '../manager.js'
 
 const MIXCLOUD_REGEX = /^https?:\/\/(?:www\.)?mixcloud\.com\//
+const MX_PREFIX = /^mx(?:search)?:/i
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
@@ -18,10 +19,11 @@ export class MixcloudSource implements AudioSource {
   name = 'mixcloud'
 
   matches(url: string): boolean {
-    return MIXCLOUD_REGEX.test(url)
+    return MIXCLOUD_REGEX.test(url) || MX_PREFIX.test(url)
   }
 
   async resolve(query: string): Promise<Track[]> {
+    if (MX_PREFIX.test(query)) return this.#search(query.replace(MX_PREFIX, '').trim())
     if (!this.matches(query)) return this.#search(query)
     try {
       const res = await fetch(query, { headers: { 'User-Agent': UA } })

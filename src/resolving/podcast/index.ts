@@ -2,6 +2,7 @@ import type { Track } from '../../types/index.js'
 import type { AudioSource } from '../manager.js'
 
 const FEED_REGEX = /\.xml(?:\?|$)|feed|rss/i
+const PCAST_PREFIX = /^pcast:/i
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
@@ -17,10 +18,11 @@ export class PodcastSource implements AudioSource {
   name = 'podcast'
 
   matches(url: string): boolean {
-    return FEED_REGEX.test(url)
+    return FEED_REGEX.test(url) || PCAST_PREFIX.test(url)
   }
 
   async resolve(query: string): Promise<Track[]> {
+    if (PCAST_PREFIX.test(query)) return this.#search(query.replace(PCAST_PREFIX, '').trim())
     if (!this.matches(query)) return this.#search(query)
     try {
       const res = await fetch(query, { headers: { 'User-Agent': UA } })

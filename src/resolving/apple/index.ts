@@ -1,7 +1,9 @@
 import type { Track } from '../../types/index.js'
 import type { AudioSource } from '../manager.js'
+import type { MirroredTrack } from '../spotify/index.js'
 
 const APPLE_REGEX = /^https?:\/\/music\.apple\.com\//
+const APPLE_PREFIX = /^am(?:search)?:/i
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
@@ -12,17 +14,19 @@ interface ITunesTrack {
   trackTimeMillis: number
   trackViewUrl: string
   artworkUrl100: string
+  isrc?: string
 }
 
 export class AppleMusicSource implements AudioSource {
   name = 'apple'
 
   matches(url: string): boolean {
-    return APPLE_REGEX.test(url)
+    return APPLE_REGEX.test(url) || APPLE_PREFIX.test(url)
   }
 
   async resolve(query: string): Promise<Track[]> {
-    if (!this.matches(query)) return this.#search(query)
+    if (APPLE_PREFIX.test(query)) return this.#search(query.replace(APPLE_PREFIX, '').trim())
+    if (!APPLE_REGEX.test(query)) return this.#search(query)
     try {
       const res = await fetch(query, { headers: { 'User-Agent': UA } })
       const html = await res.text()
@@ -31,7 +35,7 @@ export class AppleMusicSource implements AudioSource {
         html.match(/<meta property="music:artist" content="([^"]+)"/)?.[1] ??
         html.match(/"artistName":"([^"]+)"/)?.[1] ??
         'Apple Music'
-      return [this.#make(query, title, author, 0, query, '')]
+      return [this.#mirror(query, title, author, 0, query, '', null)]
     } catch {
       return []
     }
@@ -47,13 +51,14 @@ export class AppleMusicSource implements AudioSource {
       if (!res.ok) return []
       const data = await res.json()
       return (data.results ?? []).map((t: ITunesTrack) =>
-        this.#make(
+        this.#mirror(
           String(t.trackId),
           t.trackName ?? 'Unknown',
           t.artistName ?? 'Unknown',
           t.trackTimeMillis ?? 0,
           t.trackViewUrl ?? '',
           t.artworkUrl100 ?? '',
+          t.isrc ?? null,
         ),
       )
     } catch {
@@ -61,11 +66,17 @@ export class AppleMusicSource implements AudioSource {
     }
   }
 
-  #make(uri: string, title: string, author: string, dur: number, trackUrl: string, artwork: string): Track {
+  #mirror(id: string, title: string, author: string, dur: number, trackUrl: string, artwork: string, isrc: string | null): MirroredTrack {
+    const queries: string[] = []
+    if (isrc) queries.push(`ytsearch:${isrc}`)
+    queries.push(`ytsearch:${title} ${author}`)
+
     return {
-      encoded: Buffer.from(uri).toString('base64url'),
+      encoded: Buffer.from(id).toString('base64url'),
+      needsResolve: true,
+      resolveQuery: queries.join(' || '),
       info: {
-        identifier: uri,
+        identifier: id,
         title,
         author,
         duration: dur,

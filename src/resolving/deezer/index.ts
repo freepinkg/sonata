@@ -4,6 +4,7 @@ import type { Track } from '../../types/index.js'
 import type { AudioSource } from '../manager.js'
 
 const DEEZER_REGEX = /^https?:\/\/(?:www\.)?deezer\.com\//
+const DZ_PREFIX = /^dz(?:search)?:/i
 const API_BASE = 'https://api.deezer.com'
 const GW_URL = 'https://www.deezer.com/ajax/gw-light.php'
 const MEDIA_URL = 'https://media.deezer.com/v1/get_url'
@@ -75,11 +76,12 @@ export class DeezerSource implements AudioSource {
   }
 
   matches(url: string): boolean {
-    return DEEZER_REGEX.test(url)
+    return DEEZER_REGEX.test(url) || DZ_PREFIX.test(url)
   }
 
   async resolve(query: string): Promise<Track[]> {
     if (query.startsWith('deezersearch:')) query = query.slice(13).trim()
+    if (DZ_PREFIX.test(query)) return this.#search(query.replace(DZ_PREFIX, '').trim())
     if (!this.matches(query)) return this.#search(query)
     try {
       const parts = new URL(query).pathname.split('/').filter(Boolean)
@@ -295,19 +297,21 @@ export class DeezerSource implements AudioSource {
       }
     }
 
+    const info = {
+      identifier: String(id),
+      title: t.title ?? 'Unknown',
+      author: t.artist?.name ?? 'Unknown',
+      duration: t.duration * 1000,
+      uri: t.link ?? '',
+      artworkUrl: t.album?.cover_big ?? '',
+      sourceName: 'deezer',
+      isStream: false,
+      position: 0,
+    }
+    const encoded = Buffer.from(JSON.stringify({ ...info, v: 2, s: 'deezer', ud: audioUrl ? { audioUrl } : undefined })).toString('base64')
     return {
-      encoded: Buffer.from(String(id)).toString('base64url'),
-      info: {
-        identifier: String(id),
-        title: t.title ?? 'Unknown',
-        author: t.artist?.name ?? 'Unknown',
-        duration: t.duration * 1000,
-        uri: t.link ?? '',
-        artworkUrl: t.album?.cover_big ?? '',
-        sourceName: 'deezer',
-        isStream: false,
-        position: 0,
-      },
+      encoded,
+      info,
       source: 'deezer',
       userData: audioUrl ? { audioUrl } : undefined,
     }

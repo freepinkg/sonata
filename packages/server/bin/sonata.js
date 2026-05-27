@@ -2,7 +2,7 @@
 const args = process.argv.slice(2)
 
 if (args.includes('--version') || args.includes('-v')) {
-  const { VERSION, BUILD, NAME } = await import('../src/version.ts')
+  const { VERSION, BUILD, NAME } = await import('../dist/version.js')
   console.log(`${NAME} v${VERSION} (build ${BUILD})`)
   process.exit(0)
 }

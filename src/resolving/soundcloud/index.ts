@@ -2,6 +2,7 @@ import type { Track } from '../../types/index.js'
 import type { AudioSource } from '../manager.js'
 
 const SC_REGEX = /^https?:\/\/(?:www\.)?soundcloud\.com\//
+const SC_PREFIX = /^sc(?:search)?:/i
 const API_BASE = 'https://api-v2.soundcloud.com'
 
 interface SoundCloudTrack {
@@ -24,14 +25,15 @@ export class SoundCloudSource implements AudioSource {
   }
 
   matches(url: string): boolean {
-    return SC_REGEX.test(url)
+    return SC_REGEX.test(url) || SC_PREFIX.test(url)
   }
 
   async resolve(query: string): Promise<Track[]> {
     const clientId = await this.#getClientId()
     if (!clientId) return []
 
-    if (!this.matches(query)) return this.#search(query, clientId)
+    if (SC_PREFIX.test(query)) return this.#search(query.replace(SC_PREFIX, '').trim(), clientId)
+    if (!SC_REGEX.test(query)) return this.#search(query, clientId)
 
     const tracks = await this.#resolveURL(query, clientId)
     return tracks
@@ -100,24 +102,26 @@ export class SoundCloudSource implements AudioSource {
 
   async #fetchClientId(): Promise<string | null> {
     try {
+      const res = await fetch('https://m.soundcloud.com', {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36' },
+      })
+      const html = await res.text()
+      const match = html.match(/client_id[=:]['"]([a-zA-Z0-9_-]+)['"]/)
+      if (match) return match[1]
+    } catch {}
+
+    try {
       const res = await fetch('https://soundcloud.com', {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
       })
       const html = await res.text()
-
-      // Find client ID in script tags
       const match = html.match(/,client_id:"([a-zA-Z0-9_-]+)"/)
       if (match) return match[1]
-
-      // Fallback: extract from JavaScript
       const jsMatch = html.match(/client_id=([a-zA-Z0-9_-]+)/)
       if (jsMatch) return jsMatch[1]
+    } catch {}
 
-      // Hardcoded fallback
-      return 'iZIs9mchVc8GqQq4zNE6aB7qgM9v'
-    } catch {
-      return 'iZIs9mchVc8GqQq4zNE6aB7qgM9v'
-    }
+    return 'iZIs9mchVc8GqQq4zNE6aB7qgM9v'
   }
 
   #toTrack(t: SoundCloudTrack): Track {

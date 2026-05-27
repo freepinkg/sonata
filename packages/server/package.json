@@ -1,25 +1,20 @@
 {
-  "name": "sonata",
+  "name": "@sonata-sdk/server",
   "version": "4.0.0",
   "description": "High-performance Lavalink-compatible audio server for Discord bots",
   "type": "module",
-  "imports": {
-    "#*": "./dist/*.js"
-  },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "bin": {
     "sonata": "bin/sonata.js"
   },
+  "files": [
+    "bin",
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
-    "build:native": "node-gyp rebuild",
-    "start": "node dist/index.js",
-    "dev": "tsx src/index.ts",
-    "dev:watch": "tsx watch src/index.ts",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@ecliptia/faad2-wasm": "^2.11.2-ecliptia.1",
@@ -37,12 +32,8 @@
     "tweetnacl": "^1.0.3",
     "zod": "^3.23.0"
   },
-  "devDependencies": {
-    "@types/chalk": "^0.4.31",
-    "@types/node": "^22.0.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.6.0",
-    "vitest": "^2.1.0"
-  },
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
 }
