@@ -1,8 +1,0 @@
-blank_issues_enabled: false
-contact_links:
-  - name: 📖 Documentation
-    url: https://sonata.enerthya.website
-    about: Check the docs before opening an issue.
-  - name: 💬 Discord
-    url: https://discord.gg/sonata
-    about: Join the community for questions and discussion.
