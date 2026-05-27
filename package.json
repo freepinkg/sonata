@@ -1,6 +1,6 @@
 {
   "name": "sonata",
-  "version": "4.2.1",
+  "version": "4.2.1-dev",
   "description": "High-performance Lavalink-compatible audio server for Discord bots",
   "type": "module",
   "imports": {
